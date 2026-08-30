@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="mr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>पशुरक्षा — 1962 IVR Simulator</title>
+<link rel="stylesheet" href="/css/app.css">
+<style>
+  body{background:#0B2A54;display:flex;align-items:center;justify-content:center;
+       min-height:100vh;padding:16px}
+  .phone{background:#111826;border-radius:34px;padding:22px 18px;max-width:360px;width:100%;
+    box-shadow:0 30px 80px rgba(0,0,0,.5);border:3px solid #2A3550}
+  .screen{background:#0E2C1E;color:#7BE7A8;border-radius:14px;padding:16px;min-height:150px;
+    font-family:var(--f-m);font-size:13.5px;line-height:1.6;margin-bottom:16px;
+    white-space:pre-wrap}
+  .keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .key{background:#1C2740;color:#fff;border:0;border-radius:12px;padding:16px 0;
+    font-family:var(--f-d);font-size:21px;font-weight:700}
+  .key:active{background:#2E3D60}
+  .callbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+  .callbar .num{color:#fff;font-family:var(--f-d);font-size:20px;font-weight:700}
+  .hang{background:#B23A2C;color:#fff;border:0;border-radius:99px;padding:8px 18px;
+    font-weight:700}
+</style>
+</head>
+<body>
+<div class="phone">
+  <div class="callbar">
+    <div><div class="num">📞 1962</div>
+      <div style="color:#6C7A96;font-size:11px">पशु आपत्कालीन सेवा · toll-free</div></div>
+    <button class="hang" onclick="location.href='/farmer.html'">✕</button>
+  </div>
+  <div class="screen" id="screen"></div>
+  <div class="keypad" id="keypad"></div>
+</div>
+
+<script src="/js/api.js"></script>
+<script src="/js/i18n.js"></script>
+<script>
+/* IVR keypad flow → files the SAME case object through the same API.
+   Demonstrates the degradation ladder: app → SMS → IVR, one schema. */
+const screen = document.getElementById('screen');
+const keypad = document.getElementById('keypad');
+'123456789*0#'.split('').forEach(k => {
+  const b = document.createElement('button');
+  b.className = 'key'; b.textContent = k;
+  b.onclick = () => press(k);
+  keypad.appendChild(b);
+});
+
+let step = 0;
+const sel = { species: null, symptom: null, count: 1, dead: 0 };
+const SP = { 1: 'cattle', 2: 'buffalo', 3: 'goat', 4: 'sheep' };
+const SY = { 1: ['fever'], 2: ['nodules', 'fever'], 3: ['oral_lesions', 'salivation'],
+             4: ['diarrhoea'], 5: ['sudden_death'], 6: ['lameness', 'swelling'] };
+
+const SCRIPTS = [
+  `नमस्कार! पशुरक्षा 1962 सेवेत आपले स्वागत आहे.\n\nजनावराचा प्रकार निवडा:\n 1 → गाय (cattle)\n 2 → म्हैस (buffalo)\n 3 → शेळी (goat)\n 4 → मेंढी (sheep)`,
+  `मुख्य लक्षण निवडा:\n 1 → ताप (fever)\n 2 → अंगावर गाठी (nodules)\n 3 → तोंडात फोड / लाळ\n 4 → जुलाब\n 5 → अचानक मृत्यू ⚠\n 6 → लंगडेपणा / सूज`,
+  `किती जनावरे आजारी आहेत?\nसंख्या दाबा (1–9)`,
+  `एखादे जनावर मरण पावले का?\n 1 → होय\n 2 → नाही`,
+];
+
+function show(extra) { screen.textContent = (SCRIPTS[step] || '') + (extra || ''); }
+show();
+
+async function press(k) {
+  const n = parseInt(k);
+  if (step === 0 && SP[n]) { sel.species = SP[n]; step = 1; show(); }
+  else if (step === 1 && SY[n]) { sel.symptom = SY[n]; step = 2; show(); }
+  else if (step === 2 && n >= 1) { sel.count = n; step = 3; show(); }
+  else if (step === 3 && (n === 1 || n === 2)) {
+    sel.dead = n === 1 ? 1 : 0;
+    if (sel.dead) sel.symptom = [...new Set([...sel.symptom, 'sudden_death'])];
+    screen.textContent = 'तक्रार नोंदवत आहोत...\nसंपर्क जोडला जात आहे...';
+    try {
+      const res = await API.post('/api/reports', {
+        species: sel.species, symptoms: sel.symptom,
+        affected_count: sel.count, dead_count: sel.dead, channel: 'ivr',
+        client_uuid: 'ivr-' + Date.now(),
+      });
+      const band = { high: 'गंभीर 🚨 — पशुवैद्य तातडीने येतील',
+                     medium: 'मध्यम ⚠ — २४ तासांत भेट', low: 'सौम्य ✅' }[res.triage_band];
+      screen.textContent =
+        `✅ तक्रार नोंदवली गेली!\n\nकेस क्रमांक: #${res.id}\nस्थिती: ${band}\n\n` +
+        `जनावर वेगळे बांधा.\nगावाबाहेर जनावरे नेऊ नका.\n\nधन्यवाद. 🙏\n(कॉल समाप्त — ✕ दाबा)`;
+    } catch (e) {
+      screen.textContent = '⚠ नोंदणी अयशस्वी: ' + e.message +
+        '\n\n(लॉगिन आवश्यक — प्रथम शेतकरी म्हणून लॉगिन करा)';
+    }
+    step = 4;
+  }
+}
+</script>
+</body>
+</html>

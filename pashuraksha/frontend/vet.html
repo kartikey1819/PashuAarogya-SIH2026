@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PashuRaksha — Veterinary Workspace</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<header class="govbar">
+  <div class="tricolor"></div>
+  <div class="inner">
+    <div class="emblem">🩺</div>
+    <div>
+      <h1>PashuRaksha · Veterinary Workspace</h1>
+      <div class="sub">Case investigation · Treatment · Samples · Laboratory</div>
+    </div>
+    <div class="right">
+      <span class="rolechip" id="who"></span>
+      <button class="btn-ghost" onclick="API.logout()">Logout</button>
+    </div>
+  </div>
+</header>
+<div id="netbar">⚠ Offline</div>
+
+<div class="wrap">
+  <div class="tabs" id="tabs"></div>
+  <div id="view"></div>
+</div>
+
+<div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
+
+<script src="/js/api.js"></script>
+<script src="/js/i18n.js"></script>
+<script src="/js/vet.js"></script>
+</body>
+</html>
