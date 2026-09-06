@@ -3,7 +3,9 @@
 API.requireRole('farmer', 'field');
 
 let KB = null;
-let state = { tab: 'home', step: 0,
+const _hash = (location.hash || '').slice(1);
+let state = { tab: ['home', 'report', 'animals', 'services', 'alerts'].includes(_hash) ? _hash : 'home',
+  step: 0,
   report: { species: null, symptoms: [], affected_count: 1, dead_count: 0, photo: null } };
 
 const view = document.getElementById('view');
@@ -25,6 +27,7 @@ async function init() {
   catch (e) { KB = JSON.parse(localStorage.getItem('pr_kb') || 'null'); }
   renderNav(); render();
   document.addEventListener('pr-synced', () => { if (state.tab === 'home') render(); });
+  initAssistant();
 }
 
 function renderNav() {
@@ -40,6 +43,7 @@ function renderNav() {
 
 function render() {
   ({ home, report, animals, services, alerts })[state.tab]();
+  animView(view);
 }
 
 /* ------------------------------------ HOME -------------------------------- */
@@ -285,12 +289,12 @@ async function submitReport() {
   }
 }
 
-function shrinkPhoto(file) {
+function shrinkPhoto(file, max = 640) {
   return new Promise(resolve => {
     const img = new Image();
     img.onload = () => {
       const c = document.createElement('canvas');
-      const scale = Math.min(1, 640 / img.width);
+      const scale = Math.min(1, max / img.width);
       c.width = img.width * scale; c.height = img.height * scale;
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       resolve(c.toDataURL('image/jpeg', 0.6));
@@ -312,13 +316,23 @@ function showResult(res, offline) {
       <div style="margin-top:6px;font-size:14.5px">${t('vet_notified')}</div>
       ${band !== 'low' ? `<div style="margin-top:4px;font-size:14.5px"><b>⛔ ${t('do_not_move')}</b></div>` : ''}
       <div class="mono" style="margin-top:10px;font-size:12px;opacity:.85">${t('case_id')}: #${res.id}</div>`));
+    const advice = adviceFor(res.suspected_names);
     if (res.suspected_names && res.suspected_names.length) {
       view.appendChild(el('div', 'card', `<h3>Triage (not a diagnosis)</h3>
         ${res.suspected_names.map(n => `<span class="chip medium" style="margin:2px">${esc(n)}?</span>`).join('')}
         ${res.zoonotic ? `<div style="margin-top:8px"><span class="chip zoo">☣ One Health — zoonotic risk</span></div>` : ''}
+        ${advice ? `<div style="margin-top:10px;padding:10px 12px;background:var(--green-soft);border-radius:10px;font-size:14px">
+          <b>${t('what_to_do')}:</b> ${esc(advice)}</div>` : ''}
         <div class="muted" style="font-size:12px;margin-top:8px">
           ${(res.triage_reasons || []).map(x => '• ' + esc(x)).join('<br>')}</div>`));
     }
+    // Pashu Mitra: read the result aloud
+    const spoken = [t('triage_' + band), band !== 'low' ? t('do_not_move') : '', advice].filter(Boolean).join('. ');
+    const sp = el('button', 'btn outline', `🔊 ${t('listen')}`);
+    sp.style.cssText = 'width:100%;margin-top:12px;padding:13px;font-size:16px';
+    sp.onclick = () => speak(spoken);
+    view.appendChild(sp);
+    setTimeout(() => speak(spoken), 400);
   }
   const home = el('button', 'btn', '🏠 ' + t('home'));
   home.style.cssText = 'width:100%;margin-top:14px;padding:14px';
@@ -330,13 +344,45 @@ function showResult(res, offline) {
 async function animals() {
   view.innerHTML = `<div style="font-family:var(--f-d);font-size:20px;font-weight:700;
     margin:4px 0 14px">🐄 ${t('my_animals')}</div>`;
+
+  /* ---- Pashu Lens: AI breed/type identification (PashuPehchaan model) ---- */
+  const lens = el('div', 'card');
+  lens.style.cssText = 'margin-bottom:12px;border-color:#F2CBA8;background:linear-gradient(160deg,#FFF9F4,#fff 55%)';
+  lens.innerHTML = `<h3 style="display:flex">📸 ${t('lens_title')}
+      <span id="aiBadge" class="chip info" style="margin-left:auto;font-size:9px">…</span></h3>
+    <div class="muted" style="font-size:12.5px;margin:-4px 0 10px">${t('lens_hint')}</div>
+    <input type="file" accept="image/*" capture="environment" id="lensFile" hidden>
+    <button class="btn saffron" id="lensBtn" style="width:100%;padding:14px;font-size:16px">📷 ${t('take_photo')}</button>
+    <div id="lensOut"></div>`;
+  view.appendChild(lens);
+  API.get('/api/ai/status').then(s => {
+    const b = document.getElementById('aiBadge'); if (!b) return;
+    const ok = s.available && s.model_loaded;
+    b.textContent = ok ? `AI ✓ ${s.labels || 50} ${t('breeds')}` : t('ai_offline');
+    b.className = 'chip ' + (ok ? 'low' : 'medium');
+    b.style.cssText = 'margin-left:auto;font-size:9px';
+  }).catch(() => {});
+  const fileIn = lens.querySelector('#lensFile');
+  lens.querySelector('#lensBtn').onclick = () => fileIn.click();
+  fileIn.onchange = async () => {
+    const f = fileIn.files[0]; if (!f) return;
+    const out = lens.querySelector('#lensOut');
+    const dataUrl = await shrinkPhoto(f, 800);
+    out.innerHTML = `<img src="${dataUrl}" style="width:100%;border-radius:12px;margin-top:12px">
+      <div class="muted" style="text-align:center;padding:10px">🔎 ${t('identifying')}…</div>`;
+    try { renderLens(out, await API.post('/api/ai/identify', { image: dataUrl }), dataUrl); }
+    catch (e) { out.innerHTML += `<div style="color:var(--red)">${esc(e.message)}</div>`; }
+  };
+
   let list = [];
   try { list = await API.get('/api/animals'); } catch (e) {}
   if (!list.length) view.appendChild(el('div', 'muted', 'No animals / इंटरनेट आवश्यक'));
   list.forEach(a => {
     const em = SPECIES.find(s => s.k === a.species)?.em || '🐄';
     const lastVacc = a.vaccinations[0];
-    view.appendChild(el('div', 'card', `
+    const pm = a.permit || {};
+    const pmCls = { ALLOWED: 'low', BLOCKED: 'high', HOLD: 'medium' }[pm.status] || 'info';
+    const card = el('div', 'card', `
       <div style="display:flex;gap:12px;align-items:center">
         <div style="font-size:32px">${em}</div>
         <div style="flex:1">
@@ -349,8 +395,74 @@ async function animals() {
             <div class="mono" style="font-size:10px;margin-top:3px">${esc(lastVacc.disease)} · ${esc(lastVacc.given_on)}</div>`
           : `<span class="chip high">${t('due')}</span>`}
         </div>
-      </div>`)).style.marginBottom = '10px';
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px">
+        <span class="chip ${pmCls}">${pm.status === 'ALLOWED' ? '✅' : pm.status === 'BLOCKED' ? '⛔' : '⏸'}
+          ${t('permit_' + (pm.status || 'ALLOWED'))}</span>
+        ${a.withdrawal ? `<span class="chip high">🥛 ${t('milk_withdrawal')} · ${a.withdrawal.days_left} ${LANG === 'en' ? 'days' : 'दिवस'}</span>` : ''}
+        <a class="btn sm outline" style="margin-left:auto;padding:5px 11px" target="_blank"
+           href="/passport.html?tag=${encodeURIComponent(a.tag_id)}">🪪 ${t('passport')}</a>
+      </div>`);
+    card.style.marginBottom = '10px';
+    view.appendChild(card);
   });
+}
+
+function renderLens(out, r, dataUrl) {
+  const img = `<img src="${dataUrl}" style="width:100%;border-radius:12px;margin-top:12px">`;
+  if (!r.available) {
+    out.innerHTML = img + `<div class="card" style="margin-top:10px;background:var(--amber-soft)">
+      <b>⚠ ${t('ai_not_running')}</b>
+      <div class="muted" style="font-size:12px;margin-top:4px">${esc(r.detail || '')}</div></div>`;
+    return;
+  }
+  if (!r.success) {
+    out.innerHTML = img + `<div class="card" style="margin-top:10px;background:var(--amber-soft)">
+      <b>${r.not_animal ? '🚫' : '📷'} ${esc(r.error || '')}</b>
+      ${r.quality ? `<div class="muted" style="font-size:12px;margin-top:4px">Photo quality ${r.quality.score}/100</div>` : ''}
+      <button class="btn sm outline" style="margin-top:8px" onclick="document.getElementById('lensFile').click()">↻ ${t('retake')}</button></div>`;
+    return;
+  }
+  const conf = Math.round((r.best_confidence || 0) * 100);
+  const bandC = { high: 'var(--green)', medium: 'var(--amber)', low: 'var(--red)' }[r.band];
+  const spEm = r.species_app === 'buffalo' ? '🐃' : '🐄';
+  const name = LANG === 'en' ? r.best_label : r.best_label_mr;
+  out.innerHTML = img + `
+    <div class="card" style="margin-top:10px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <span style="font-size:36px">${spEm}</span>
+        <div style="flex:1"><div style="font-family:var(--f-d);font-size:22px;font-weight:700;line-height:1.1">${esc(name)}</div>
+          <div class="muted" style="font-size:13px">${t(r.species_app)} · ${esc(r.best_label)}</div></div>
+        <div style="text-align:center"><div style="font-family:var(--f-d);font-size:26px;font-weight:700;color:${bandC}">${conf}%</div>
+          <div class="muted" style="font-size:10px;letter-spacing:.06em">${t('confidence').toUpperCase()}</div></div>
+      </div>
+      <div class="bar-track" style="margin-top:10px"><div class="bar-fill ${r.band === 'high' ? '' : r.band === 'medium' ? 'warn' : 'crit'}" style="width:${conf}%"></div></div>
+      <div style="margin-top:10px;display:flex;gap:5px;flex-wrap:wrap">${(r.top3 || []).map((c, i) =>
+        `<span class="chip ${i ? 'info' : 'low'}">${esc(LANG === 'en' ? c.label : c.label_mr)} ${Math.round(c.confidence * 100)}%</span>`).join('')}</div>
+      ${r.band === 'low' ? `<div class="muted" style="font-size:12px;margin-top:8px">⚠ ${t('ai_low_conf')}</div>` : ''}
+      <div class="muted" style="font-size:10.5px;margin-top:8px;font-family:var(--f-m)">
+        EfficientNetV2 · ${r.frames_analysed || 1} frame · ${r.latency_ms} ms · quality ${(r.quality || {}).score}/100 · subject gate ${((r.subject_gate || {}).confidence) || '—'}</div>
+      <button class="btn green" id="lensReg" style="width:100%;margin-top:12px;padding:13px">✅ ${t('register_animal')}</button>
+    </div>`;
+  out.querySelector('#lensReg').onclick = async () => {
+    try {
+      const a = await API.post('/api/animals', { species: r.species_app, breed: r.best_label, sex: 'F', age_months: 36 });
+      toast(`✅ ${t('registered')} · 🏷 ${a.tag_id}`, 'ok');
+      render();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+}
+
+/* speak() is provided by assistant.js (shared voice engine) */
+function adviceFor(names) {
+  const ds = (KB && KB.diseases) || {};
+  for (const n of names || []) {
+    for (const d of Object.values(ds)) {
+      const nm = d.name || {};
+      if (nm.en === n || nm[LANG] === n) return (d.action || {})[LANG] || (d.action || {}).en || '';
+    }
+  }
+  return '';
 }
 
 /* --------------------------------- SERVICES ------------------------------- */
@@ -430,13 +542,38 @@ async function services() {
     });
   } catch (e) { campCard.appendChild(el('div', 'muted', '—')); }
 
-  /* ---- disease guide from the KB ---- */
+  /* ---- disease guide from the KB — grouped like the 1962 Farmers App ---- */
   const guideCard = el('div', 'card');
   guideCard.style.marginBottom = '12px';
-  guideCard.innerHTML = `<h3>📖 ${t('guide')}</h3>`;
+  guideCard.innerHTML = `<h3>📖 ${t('guide')}</h3>
+    <div class="muted" style="font-size:11.5px;margin:-6px 0 8px">
+      ${LANG === 'mr' ? 'राष्ट्रीय पशुरोग नियंत्रण कार्यक्रमातील (LHDCP) प्रमुख रोग' :
+        LANG === 'hi' ? 'राष्ट्रीय पशुरोग नियंत्रण कार्यक्रम (LHDCP) के प्रमुख रोग' :
+        'Major diseases under the national LHDCP programme'}</div>`;
   view.appendChild(guideCard);
   const syms = (KB && KB.symptoms) || {};
+  const CATS = {
+    cattle_buffalo: { em: '🐄🐃', mr: 'गाय-म्हैस रोग', hi: 'गाय-भैंस रोग', en: 'Cattle & Buffalo' },
+    sheep_goat:     { em: '🐐🐑', mr: 'शेळ्या-मेंढ्या रोग', hi: 'बकरी-भेड़ रोग', en: 'Goat & Sheep' },
+    poultry:        { em: '🐔',   mr: 'कुक्कुट रोग', hi: 'मुर्गी रोग', en: 'Poultry' },
+    pig:            { em: '🐖',   mr: 'वराह रोग', hi: 'सूअर रोग', en: 'Pig' },
+    zoonotic:       { em: '☣️',   mr: 'माणसांनाही होणारे रोग', hi: 'मनुष्यों में फैलने वाले', en: 'Zoonotic — spread to humans' },
+    general:        { em: '🩹',   mr: 'सर्वसाधारण', hi: 'सामान्य', en: 'General' },
+  };
+  const byCat = {};
   Object.entries((KB && KB.diseases) || {}).forEach(([k, d]) => {
+    (byCat[d.category || 'general'] = byCat[d.category || 'general'] || []).push([k, d]);
+  });
+  Object.keys(CATS).filter(c => byCat[c]).forEach(cat => {
+    guideCard.appendChild(el('div', '', `
+      <div style="font-family:var(--f-d);font-weight:700;font-size:13.5px;color:var(--navy);
+        letter-spacing:.05em;text-transform:uppercase;margin:14px 0 2px;display:flex;
+        align-items:center;gap:7px"><span>${CATS[cat].em}</span>
+        ${esc(CATS[cat][LANG] || CATS[cat].en)}
+        <span style="flex:1;height:1px;background:var(--hair)"></span></div>`));
+    byCat[cat].forEach(([k, d]) => renderDisease(guideCard, k, d, syms));
+  });
+  function renderDisease(guideCard, k, d) {
     const det = el('details');
     det.style.cssText = 'border-bottom:1px solid var(--surface-2);padding:8px 0';
     const signs = Object.keys(d.signs || {}).slice(0, 4)
@@ -459,7 +596,7 @@ async function services() {
           'This disease can spread to humans!'}</div>` : ''}
       </div>`;
     guideCard.appendChild(det);
-  });
+  }
 
   /* ---- helpline ---- */
   view.appendChild(el('div', 'card', `<h3>☎️ ${t('helpline')}</h3>
@@ -477,9 +614,145 @@ async function alerts() {
   try { list = await API.get('/api/alerts?role=farmer&lang=' + LANG); } catch (e) {}
   if (!list.length) view.appendChild(el('div', 'muted', '—'));
   list.forEach(a => {
-    view.appendChild(el('div', `alert-item ${a.severity}`, `
+    const item = el('div', `alert-item ${a.severity}`, `
       <div class="t">${esc(a.title.replace(/^\[\w+\]\s*/, ''))}</div>
       <div class="b">${esc(a.body)}</div>
-      <div class="meta">${a.village ? '📍 ' + esc(a.village) + ' · ' : ''}${fmtDT(a.created_at)}</div>`));
+      <div class="meta" style="display:flex;align-items:center;gap:8px">
+        <span>${a.village ? '📍 ' + esc(a.village) + ' · ' : ''}${fmtDT(a.created_at)}</span>
+        <button class="btn sm outline" style="margin-left:auto;padding:3px 10px">🔊 ${t('listen')}</button></div>`);
+    item.querySelector('button').onclick = () => speak(a.title.replace(/^\[\w+\]\s*/, '') + '. ' + a.body);
+    view.appendChild(item);
+  });
+}
+
+/* ------------------------------ PASHU MITRA -------------------------------- */
+/* Voice assistant skills for the farmer app. Each skill: match(ql) + run(q, ql)
+   returning {text, actions?, spoken?}. Keywords cover Hindi, Marathi, English. */
+window.PR = {
+  goTab(tab) { state.tab = tab; if (tab === 'report') resetReport(); renderNav(); render(); },
+  startReport(species, symptoms) {
+    resetReport(); state.tab = 'report';
+    if (species) { state.report.species = species; state.step = 1; }
+    if (symptoms && symptoms.length) { state.report.symptoms = symptoms; state.step = species ? 2 : 1; }
+    renderNav(); render();
+  },
+};
+
+function initAssistant() {
+  const L = (hi, mr, en) => (LANG === 'mr' ? mr : LANG === 'en' ? en : hi);
+  const kw = PashuMitra.kw;
+  const SPK = { cattle: ['गाय', 'गाई', 'गायी', 'cow', 'cattle', 'बैल', 'बछड़', 'वासरू'],
+                buffalo: ['भैंस', 'भैस', 'म्हैस', 'म्हशी', 'buffalo', 'रेडा'],
+                goat: ['बकरी', 'बकर', 'शेळी', 'शेळ्या', 'goat'],
+                sheep: ['भेड़', 'भेड', 'मेंढी', 'मेंढ्या', 'sheep'],
+                poultry: ['मुर्गी', 'मुर्गा', 'कोंबडी', 'कोंबड्या', 'poultry', 'chicken', 'hen'] };
+  const findSpecies = ql => Object.keys(SPK).find(k => kw(ql, SPK[k]));
+  const kbDisease = ql => {
+    for (const [k, d] of Object.entries((KB && KB.diseases) || {})) {
+      const names = Object.values(d.name || {}).map(x => String(x).toLowerCase());
+      if (names.some(n => n && ql.includes(n.split(' ')[0]) && n.split(' ')[0].length > 2)) return [k, d];
+    }
+    return null;
+  };
+
+  const skills = [
+    { // report a sick animal (optionally with species + symptoms in the sentence)
+      match: ql => kw(ql, ['बीमार', 'बिमार', 'आजारी', 'तक्रार', 'शिकायत', 'रिपोर्ट', 'report', 'sick', 'दर्ज', 'मर गई', 'मर गया', 'मेली', 'मेला', 'died']),
+      run: (q, ql) => {
+        const sp = findSpecies(ql);
+        const syms = (typeof parseVoice === 'function') ? parseVoice(q) : [];
+        const spName = sp ? t(sp) : '';
+        const text = sp
+          ? L(`ठीक है — ${spName} की शिकायत दर्ज करते हैं। ${syms.length ? syms.length + ' लक्षण पहचाने।' : 'अब लक्षण चुनिए।'}`,
+              `ठीक — ${spName}ची तक्रार नोंदवूया. ${syms.length ? syms.length + ' लक्षणे ओळखली.' : 'आता लक्षणे निवडा.'}`,
+              `Okay — filing a report for ${spName}. ${syms.length ? syms.length + ' symptom(s) recognised.' : 'Now pick the symptoms.'}`)
+          : L('कौन सा जानवर बीमार है? नीचे चुनिए।', 'कोणते जनावर आजारी आहे? खाली निवडा.', 'Which animal is sick? Choose below.');
+        return { text, actions: [{ label: L('📢 शिकायत शुरू करें', '📢 तक्रार सुरू करा', '📢 Start report'),
+                                    run: () => PR.startReport(sp, syms) }] };
+      } },
+    { // vaccination camps
+      match: ql => kw(ql, ['शिविर', 'टीका', 'टीकाकरण', 'लसीकरण', 'लस ', 'camp', 'vaccin', 'लसी']),
+      run: async () => {
+        const camps = await API.get('/api/camps?mine=true');
+        if (!camps.length) return { text: L('अभी आपके क्षेत्र में कोई शिविर नहीं है।', 'सध्या तुमच्या भागात शिबिर नाही.', 'No camp scheduled in your area right now.') };
+        const c = camps[0];
+        const nm = LANG === 'en' ? c.disease_name : (c.disease_name_mr || c.disease_name);
+        return { text: L(`आपके क्षेत्र में <b>${esc(nm)}</b> टीकाकरण शिविर <b>${esc(c.village)}</b> में <b>${esc(c.date)}</b> को है — मुफ़्त। कुल ${camps.length} शिविर।`,
+                         `तुमच्या भागात <b>${esc(nm)}</b> लसीकरण शिबिर <b>${esc(c.village)}</b> येथे <b>${esc(c.date)}</b> रोजी — मोफत. एकूण ${camps.length} शिबिरे.`,
+                         `A free <b>${esc(nm)}</b> camp is at <b>${esc(c.village)}</b> on <b>${esc(c.date)}</b>. ${camps.length} camp(s) in total.`),
+                 actions: [{ label: L('💉 सभी शिविर देखें', '💉 सर्व शिबिरे', '💉 See all camps'), run: () => PR.goTab('services') }] };
+      } },
+    { // compensation claims
+      match: ql => kw(ql, ['मुआवजा', 'मुआवज़ा', 'भरपाई', 'दावा', 'claim', 'पैसा', 'पैसे', 'compensation', 'नुकसान']),
+      run: async () => {
+        const cl = await API.get('/api/claims/mine');
+        if (!cl.length) return { text: L('अभी कोई दावा नहीं है। मृत्यु की रिपोर्ट के बाद "सेवा" में दावा करें।', 'सध्या दावा नाही. मृत्यूची तक्रार केल्यावर "सेवा" मध्ये दावा करा.', 'No claims yet. After reporting a death, file one under Services.'),
+                                 actions: [{ label: L('🤝 सेवा', '🤝 सेवा', '🤝 Services'), run: () => PR.goTab('services') }] };
+        const c = cl[0];
+        const st = { FILED: L('दर्ज', 'दाखल', 'filed'), UNDER_REVIEW: L('जाँच में', 'तपासणीत', 'under review'),
+                     APPROVED: L('मंज़ूर ✅', 'मंजूर ✅', 'approved ✅'), PAID: L('भुगतान हो गया 💸', 'रक्कम जमा 💸', 'paid 💸'),
+                     REJECTED: L('अस्वीकृत', 'नाकारला', 'rejected') }[c.status] || c.status;
+        return { text: L(`आपका दावा #${c.id} — ₹${c.amount.toLocaleString('en-IN')} — <b>${st}</b> है।`,
+                         `तुमचा दावा #${c.id} — ₹${c.amount.toLocaleString('en-IN')} — <b>${st}</b>.`,
+                         `Your claim #${c.id} for ₹${c.amount.toLocaleString('en-IN')} is <b>${st}</b>.`),
+                 actions: [{ label: L('💰 दावे देखें', '💰 दावे पहा', '💰 View claims'), run: () => PR.goTab('services') }] };
+      } },
+    { // weather
+      match: ql => kw(ql, ['मौसम', 'हवामान', 'weather', 'बारिश', 'पाऊस', 'तापमान', 'गर्मी']),
+      run: async () => {
+        const w = await API.get('/api/myweather');
+        const x = w.weather || {};
+        return { text: L(`${esc(w.village)} में आज ${Math.round(x.temp_c)}°C, नमी ${Math.round(x.humidity)}%, बारिश ${x.rain_mm || 0} मिमी। ${x.humidity > 70 ? 'नमी ज़्यादा है — मक्खी-मच्छर बढ़ेंगे, जानवरों को साफ़ रखें।' : ''}`,
+                         `${esc(w.village)} येथे आज ${Math.round(x.temp_c)}°C, आर्द्रता ${Math.round(x.humidity)}%, पाऊस ${x.rain_mm || 0} मिमी. ${x.humidity > 70 ? 'आर्द्रता जास्त — माश्या वाढतील, गोठा स्वच्छ ठेवा.' : ''}`,
+                         `${esc(w.village)} today: ${Math.round(x.temp_c)}°C, humidity ${Math.round(x.humidity)}%, rain ${x.rain_mm || 0} mm.`) };
+      } },
+    { // disease info from the knowledge base
+      match: ql => !!kbDisease(ql),
+      run: (q, ql) => {
+        const [k, d] = kbDisease(ql);
+        const syms = (KB && KB.symptoms) || {};
+        const signs = Object.keys(d.signs || {}).slice(0, 4).map(s => (syms[s] || {})[LANG] || s).join(', ');
+        const nm = (d.name || {})[LANG] || d.name.en;
+        return { text: `<b>${esc(nm)}</b>${d.zoonotic ? ' ☣' : ''}<br>${L('लक्षण', 'लक्षणे', 'Signs')}: ${esc(signs)}<br>${L('क्या करें', 'काय करावे', 'What to do')}: ${esc((d.action || {})[LANG] || d.action.en)}`,
+                 actions: [{ label: L('📢 शिकायत करें', '📢 तक्रार करा', '📢 Report'), run: () => PR.startReport(null, []) }] };
+      } },
+    { // my animals
+      match: ql => kw(ql, ['मेरे जानवर', 'जानवर', 'पशु', 'माझी जनावरे', 'जनावरे', 'animals', 'कितनी गाय', 'passport', 'पासपोर्ट']),
+      run: async () => {
+        const list = await API.get('/api/animals');
+        const due = list.filter(a => !a.vaccinations.length).length;
+        const blocked = list.filter(a => (a.permit || {}).status === 'BLOCKED').length;
+        return { text: L(`आपके ${list.length} जानवर दर्ज हैं। ${due ? due + ' का टीका बाकी है। ' : ''}${blocked ? blocked + ' की आवाजाही अभी बंद है (रोग क्षेत्र)।' : ''}`,
+                         `तुमची ${list.length} जनावरे नोंदली आहेत. ${due ? due + ' ची लस बाकी. ' : ''}${blocked ? blocked + ' ची वाहतूक सध्या बंद (रोग क्षेत्र).' : ''}`,
+                         `You have ${list.length} animals registered. ${due ? due + ' need vaccination. ' : ''}${blocked ? blocked + ' are movement-blocked (containment zone).' : ''}`),
+                 actions: [{ label: L('🐄 जानवर देखें', '🐄 जनावरे पहा', '🐄 View animals'), run: () => PR.goTab('animals') }] };
+      } },
+    { // latest advisory
+      match: ql => kw(ql, ['सूचना', 'अलर्ट', 'alert', 'सलाह', 'सल्ला', 'advisory', 'खबर', 'बातमी']),
+      run: async () => {
+        const list = await API.get('/api/alerts?role=farmer&lang=' + LANG);
+        if (!list.length) return { text: L('अभी कोई नई सूचना नहीं।', 'सध्या नवीन सूचना नाही.', 'No new advisories.') };
+        const a = list[0];
+        return { text: `<b>${esc(a.title.replace(/^\[\w+\]\s*/, ''))}</b><br>${esc(a.body)}`,
+                 actions: [{ label: L('🔔 सभी सूचनाएं', '🔔 सर्व सूचना', '🔔 All alerts'), run: () => PR.goTab('alerts') }] };
+      } },
+    { // help / doctor / 1962
+      match: ql => kw(ql, ['मदद', 'हेल्प', 'help', '1962', 'डॉक्टर', 'डाक्टर', 'पशुवैद्य', 'vet', 'फोन', 'नंबर']),
+      run: () => ({ text: L('पशु एम्बुलेंस के लिए <b>1962</b> पर मुफ़्त कॉल करें — पशु चिकित्सक आपके दरवाज़े आएंगे। ऐप से रिपोर्ट करने पर भी डॉक्टर को तुरंत सूचना जाती है।',
+                             'पशु रुग्णवाहिकेसाठी <b>1962</b> वर मोफत कॉल करा — पशुवैद्य दारात येतील. ॲपने तक्रार केल्यासही डॉक्टरांना लगेच कळते.',
+                             'Call <b>1962</b> (free) for the animal ambulance — a vet comes to your door. Reporting in the app also alerts the vet instantly.'),
+                    actions: [{ label: '☎️ IVR 1962', run: () => location.href = '/ivr.html' }] }) },
+    { // navigation
+      match: ql => kw(ql, ['होम', 'घर', 'मुख्य', 'home', 'वापस', 'back']),
+      run: () => { PR.goTab('home'); return { text: L('मुख्य पृष्ठ खोल दिया।', 'मुख्य पान उघडले.', 'Opened home.') }; } },
+  ];
+
+  PashuMitra.init({
+    page: 'farmer', offsetBottom: 92, skills,
+    examples: [L('मेरी गाय बीमार है, बुखार और गांठें हैं', 'माझी गाय आजारी आहे, ताप आणि गाठी', 'My cow is sick, fever and nodules'),
+               L('टीकाकरण शिविर कब है?', 'लसीकरण शिबिर कधी?', 'When is the vaccination camp?'),
+               L('मेरे मुआवजे का क्या हुआ?', 'माझ्या भरपाईचे काय झाले?', 'What happened to my claim?'),
+               L('लम्पी रोग क्या है?', 'लम्पी रोग म्हणजे काय?', 'What is lumpy skin disease?'),
+               L('आज का मौसम', 'आजचे हवामान', "Today's weather")],
   });
 }

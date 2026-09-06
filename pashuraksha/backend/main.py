@@ -1,4 +1,4 @@
-"""PashuRaksha AI — FastAPI application (all routes).
+"""PashuAarogya AI — FastAPI application (all routes).
 
 Run:  python main.py        (from backend/)
 Then open http://127.0.0.1:8000
@@ -21,11 +21,14 @@ from models import (Location, User, Farmer, Animal, Case, Vaccination,
 import engine as intel
 import seed as seeder
 import weather as wx
+import forecast as fc
+
+AI_URL = os.environ.get("PASHU_AI_URL", "http://127.0.0.1:8001")
 
 SECRET = os.environ.get("PASHU_SECRET", "pashuraksha-demo-secret")
 DEMO_OTP = "123456"
 
-app = FastAPI(title="PashuRaksha AI", version="1.0")
+app = FastAPI(title="PashuAarogya AI", version="1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                    allow_headers=["*"])
 
@@ -34,6 +37,13 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
+    # lightweight migration for databases created before this column existed
+    try:
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "ALTER TABLE treatments ADD COLUMN withdrawal_days INTEGER DEFAULT 0")
+    except Exception:
+        pass
     db = SessionLocal()
     try:
         if seeder.seed_all(db):
@@ -154,8 +164,55 @@ def my_animals(user: User = Depends(current_user), db: Session = Depends(get_db)
                     "breed": a.breed, "sex": a.sex, "age_months": a.age_months,
                     "vaccinations": [{"disease": v.disease_key,
                                       "given_on": str(v.given_on),
-                                      "due_on": str(v.due_on)} for v in vaccs]})
+                                      "due_on": str(v.due_on)} for v in vaccs],
+                    "withdrawal": _withdrawal_status(db, a.id),
+                    "permit": _permit_status(db, a.village_id, a.id)})
     return out
+
+
+# ------------------------------------------------ passport / permit helpers --
+def _withdrawal_status(db, animal_id: int):
+    """Milk/meat withdrawal countdown from the latest treatment on this animal."""
+    tr = (db.query(Treatment).join(Case, Treatment.case_id == Case.id)
+            .filter(Case.animal_id == animal_id)
+            .order_by(Treatment.given_at.desc()).first())
+    if not tr or not tr.withdrawal_days:
+        return None
+    until = tr.given_at + timedelta(days=tr.withdrawal_days)
+    left = (until - datetime.utcnow()).days + 1
+    if left <= 0:
+        return None
+    return {"until": until.date().isoformat(), "days_left": left,
+            "diagnosis": tr.diagnosis, "treatment": tr.treatment}
+
+
+def _permit_status(db, village_id: int, animal_id: int | None = None):
+    """Movement permit: BLOCKED inside an active outbreak zone, HOLD if the
+    animal itself has an open case, else ALLOWED. Enforced at checkposts/markets
+    by scanning the passport QR."""
+    kb = intel.load_kb()
+    for ob in db.query(Outbreak).filter(Outbreak.status == "ACTIVE").all():
+        zone = json.loads(ob.zone_village_ids or "[]")
+        if village_id in zone:
+            dn = kb["diseases"].get(ob.suspected or "", {}).get("name", {})
+            until = (ob.detected_at + timedelta(days=21)).date().isoformat()
+            return {"status": "BLOCKED",
+                    "reason_en": f"Village inside active {dn.get('en', 'disease')} "
+                                 f"containment zone (cluster #{ob.id})",
+                    "reason_hi": f"गाँव सक्रिय {dn.get('hi', 'रोग')} नियंत्रण क्षेत्र में है",
+                    "reason_mr": f"गाव सक्रिय {dn.get('mr', 'रोग')} नियंत्रण क्षेत्रात आहे",
+                    "until": until, "outbreak_id": ob.id}
+    if animal_id:
+        open_case = (db.query(Case).filter(Case.animal_id == animal_id,
+                                           Case.status.notin_(["CLOSED"])).first())
+        if open_case:
+            return {"status": "HOLD",
+                    "reason_en": f"Animal has an open case #{open_case.id} ({open_case.status})",
+                    "reason_hi": f"पशु का केस #{open_case.id} चल रहा है",
+                    "reason_mr": f"जनावराची केस #{open_case.id} सुरू आहे",
+                    "until": None}
+    return {"status": "ALLOWED", "reason_en": "No restriction",
+            "reason_hi": "कोई प्रतिबंध नहीं", "reason_mr": "कोणतेही निर्बंध नाहीत", "until": None}
 
 
 class AnimalIn(BaseModel):
@@ -292,6 +349,7 @@ class CaseAction(BaseModel):
     diagnosis: str = ""
     treatment: str = ""
     escalate_to: str = ""
+    withdrawal_days: int = 0   # milk/meat withdrawal after antibiotics
 
 
 VALID_TRANSITIONS = {
@@ -315,7 +373,23 @@ def case_action(case_id: int, body: CaseAction,
     elif a == "treat":
         c.status = "TREATMENT"
         db.add(Treatment(case_id=c.id, vet_id=user.id,
-                         diagnosis=body.diagnosis, treatment=body.treatment))
+                         diagnosis=body.diagnosis, treatment=body.treatment,
+                         withdrawal_days=max(0, body.withdrawal_days)))
+        if body.withdrawal_days > 0 and c.farmer_id:
+            fm = db.get(Farmer, c.farmer_id)
+            fu = db.get(User, fm.user_id) if fm else None
+            for lg, ttl, bd in (
+                ("hi", f"दूध बिक्री रोकें — {body.withdrawal_days} दिन",
+                       f"केस #{c.id}: दवा के बाद {body.withdrawal_days} दिन दूध/मांस न बेचें "
+                       f"(खाद्य सुरक्षा)। तारीख पशुआरोग्य पासपोर्ट में देखें।"),
+                ("mr", f"दूध विक्री थांबवा — {body.withdrawal_days} दिवस",
+                       f"केस #{c.id}: औषधोपचारानंतर {body.withdrawal_days} दिवस दूध/मांस विकू नका "
+                       f"(अन्न सुरक्षा). पशुआरोग्य पासपोर्टमध्ये तारीख पहा."),
+                ("en", f"Stop selling milk — {body.withdrawal_days} days",
+                       f"Case #{c.id}: milk/meat withdrawal for {body.withdrawal_days} days after "
+                       f"treatment (food safety). Date shown on the animal passport.")):
+                db.add(Alert(kind="advisory", severity="high", title=f"[{lg}] {ttl}",
+                             body=bd, village_id=c.village_id, target_role="farmer", lang=lg))
     elif a == "escalate":
         c.escalated_to = body.escalate_to or "block"
         v = db.get(Location, c.village_id)
@@ -807,7 +881,9 @@ def create_camp(body: CampIn, user: User = Depends(current_user),
               name=body.name or f"{dn} vaccination camp — {v.name}")
     db.add(cp); db.flush()
     act = kb["diseases"].get(body.disease_key, {})
-    for lang, txt in (("mr", f"लसीकरण शिबिर: {v.name} येथे {cp.camp_date:%d/%m/%Y} रोजी "
+    for lang, txt in (("hi", f"टीकाकरण शिविर: {v.name} में {cp.camp_date:%d/%m/%Y} को "
+                             f"{act.get('name', {}).get('hi', dn)} टीका मुफ़्त। अपने पशु लेकर आएं।"),
+                      ("mr", f"लसीकरण शिबिर: {v.name} येथे {cp.camp_date:%d/%m/%Y} रोजी "
                              f"{act.get('name', {}).get('mr', dn)} लस मोफत. आपली जनावरे घेऊन या."),
                       ("en", f"Vaccination camp at {v.name} on {cp.camp_date:%d %b %Y} — "
                              f"free {dn} vaccine. Bring your animals.")):
@@ -865,6 +941,180 @@ def export_csv(what: str, db: Session = Depends(get_db)):
                              f"attachment; filename=pashuraksha_{what}.csv"})
 
 
+
+@app.get("/api/hostinfo")
+def hostinfo():
+    """LAN addresses so a phone on the same Wi-Fi can open the app."""
+    import socket
+    urls = []
+    try:
+        s_ = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s_.connect(("8.8.8.8", 80))
+        urls.append(f"http://{s_.getsockname()[0]}:8000")
+        s_.close()
+    except Exception:
+        pass
+    return {"urls": urls}
+
+
+# ------------------------------------------ Pashu Lens: AI identification --
+# Proxies to the PashuPehchaan breed-recognition sidecar (EfficientNetV2,
+# 50 Indian cattle/buffalo breeds, subject + quality gates). Degrades honestly.
+import urllib.request, urllib.error
+
+BREED_MR = {
+    "Gir_Cow": "गीर", "GirCross": "गीर संकर", "Khillari": "खिल्लार", "Deoni": "देवणी",
+    "Dangi": "डांगी", "Red_sindhi": "लाल सिंधी", "Sahiwal": "साहिवाल",
+    "SahiwalCross": "साहिवाल संकर", "HFCross": "एच.एफ. संकर", "Holstein_friesian": "होल्स्टिन फ्रिजियन",
+    "JerseyCross": "जर्सी संकर", "jersey": "जर्सी", "Kankrej": "कांकरेज", "Tharparkar": "थारपारकर",
+    "Ongole": "ओंगोल", "hariana": "हरियाणा", "Rathi": "राठी", "Hallikar": "हल्लीकर",
+    "amritmahal": "अमृतमहल", "Murrah": "मुऱ्हा", "Pandharpuri": "पंढरपुरी", "Nagpuri": "नागपुरी",
+    "Jafrabadi": "जाफराबादी", "Surti": "सुरती", "Mehsana": "मेहसाणा", "Nili_Ravi": "नीली रावी",
+    "Banni": "बन्नी", "Bhadwari": "भदावरी", "Toda": "तोडा", "Red_Dane": "रेड डेन",
+    "Brown_Swiss": "ब्राउन स्विस", "Gurnesey": "ग्वेर्न्सी", "Aryshire": "आयरशायर",
+    "Kenkatha": "केनकथा", "Kherigarh": "खेरीगढ", "Gangatiri": "गंगातिरी", "Malnad_gidda": "मलनाड गिड्डा",
+    "vechur": "वेचूर", "kangyam": "कांगायम", "pulikulam": "पुलिकुलम", "Umblachery": "उंबलाचेरी",
+    "krishna_valley": "कृष्णा व्हॅली", "nagori": "नागोरी", "nimari": "निमारी", "bargur_cow": "बारगूर",
+    "Binjharpuri": "बिंझारपुरी", "Badri_cow": "बद्री", "Ladakhi_cow": "लडाखी", "Kasargod": "कासरगोड",
+    "Girlando": "गिरलांडो",
+}
+
+
+def _pretty_breed(label: str):
+    return label.replace("_", " ").replace(" cow", "").replace(" Cow", "").strip().title()
+
+
+def _ai_get(path, timeout=3):
+    with urllib.request.urlopen(AI_URL + path, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+
+@app.get("/api/ai/status")
+def ai_status():
+    try:
+        h = _ai_get("/health")
+        return {"available": True, "model_loaded": h.get("model_loaded"),
+                "model_version": h.get("model_version"), "labels": h.get("labels"),
+                "gate": (h.get("subject_gate") or {}).get("loaded")}
+    except Exception as e:
+        return {"available": False, "model_loaded": False, "error": str(e)[:120]}
+
+
+class IdentifyIn(BaseModel):
+    image: str
+
+
+@app.post("/api/ai/identify")
+def ai_identify(body: IdentifyIn, user: User = Depends(current_user),
+                db: Session = Depends(get_db)):
+    try:
+        req = urllib.request.Request(
+            AI_URL + "/predict", data=json.dumps({"image": body.image}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=60) as r:
+            res = json.loads(r.read().decode())
+    except Exception as e:
+        return {"success": False, "available": False,
+                "error": "AI identification service is not running on this server.",
+                "detail": str(e)[:160]}
+    res["available"] = True
+    if res.get("success"):
+        sp = {"cow": "cattle", "buffalo": "buffalo"}.get(res.get("species"), "cattle")
+        conf = float(res.get("best_confidence") or 0)
+        res["species_app"] = sp
+        res["band"] = "high" if conf >= 0.7 else ("medium" if conf >= 0.45 else "low")
+        for c in res.get("top3", []):
+            c["label"] = _pretty_breed(c["breed"])
+            c["label_mr"] = BREED_MR.get(c["breed"], _pretty_breed(c["breed"]))
+            c["species_app"] = {"cow": "cattle", "buffalo": "buffalo"}.get(c.get("species"), "cattle")
+        res["best_label"] = _pretty_breed(res.get("best_breed") or "")
+        res["best_label_mr"] = BREED_MR.get(res.get("best_breed"), res["best_label"])
+        audit(db, user.id, "ai_identify",
+              f"{res.get('best_breed')} {round(conf, 2)}"); db.commit()
+    return res
+
+
+# ---------------------------------------------- forecast / what-if planner --
+@app.get("/api/forecast")
+def forecast_api(days: int = 7, ring_km: float = 12.0,
+                 outbreak_id: Optional[int] = None,
+                 user: User = Depends(current_user), db: Session = Depends(get_db)):
+    days = max(3, min(14, days))
+    return fc.compare(db, days=days, ring_km=ring_km, outbreak_id=outbreak_id)
+
+
+# --------------------------------------------- animal health passport (public)
+@app.get("/api/passport/{tag}")
+def passport(tag: str, db: Session = Depends(get_db)):
+    a = db.query(Animal).filter(Animal.tag_id == tag).first()
+    if not a:
+        raise HTTPException(404, "No animal with this tag")
+    v = db.get(Location, a.village_id)
+    blk = db.get(Location, v.parent_id) if v else None
+    dist = db.get(Location, blk.parent_id) if blk else None
+    fm = db.get(Farmer, a.farmer_id) if a.farmer_id else None
+    owner = db.get(User, fm.user_id) if fm else None
+    kb = intel.load_kb()
+    vaccs = (db.query(Vaccination).filter(Vaccination.animal_id == a.id)
+               .order_by(Vaccination.given_on.desc()).all())
+    cases = (db.query(Case).filter(Case.animal_id == a.id)
+               .order_by(Case.reported_at.desc()).all())
+    treatments = []
+    for c in cases:
+        for tr in db.query(Treatment).filter(Treatment.case_id == c.id).all():
+            treatments.append({"case_id": c.id, "diagnosis": tr.diagnosis,
+                               "treatment": tr.treatment,
+                               "given_at": tr.given_at.isoformat(),
+                               "withdrawal_days": tr.withdrawal_days or 0})
+    return {
+        "tag_id": a.tag_id, "species": a.species, "breed": a.breed, "sex": a.sex,
+        "age_months": a.age_months,
+        "owner": (owner.name.split(" ")[0] + " " + owner.name.split(" ")[-1][:1] + ".")
+                 if owner and " " in owner.name else (owner.name if owner else None),
+        "village": v.name if v else None, "block": blk.name if blk else None,
+        "district": dist.name if dist else None,
+        "vaccinations": [{"disease": x.disease_key,
+                          "disease_name": kb["diseases"].get(x.disease_key, {})
+                                            .get("name", {}).get("en", x.disease_key),
+                          "disease_name_mr": kb["diseases"].get(x.disease_key, {})
+                                            .get("name", {}).get("mr", ""),
+                          "disease_name_hi": kb["diseases"].get(x.disease_key, {})
+                                            .get("name", {}).get("hi", ""),
+                          "given_on": str(x.given_on), "due_on": str(x.due_on),
+                          "campaign": x.campaign} for x in vaccs],
+        "cases": [{"id": c.id, "status": c.status, "symptoms": c.symptoms,
+                   "reported_at": c.reported_at.isoformat(),
+                   "suspected": c.suspected} for c in cases[:5]],
+        "treatments": treatments[:5],
+        "withdrawal": _withdrawal_status(db, a.id),
+        "permit": _permit_status(db, a.village_id, a.id),
+        "verified_at": datetime.utcnow().isoformat(),
+    }
+
+
+# ------------------------------------------------------------------ SITREP --
+@app.get("/api/sitrep")
+def sitrep(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if user.role not in ("block", "district", "state"):
+        raise HTTPException(403, "Officials only")
+    summ = dashboard_summary(db)
+    mp = dashboard_map("village", db)
+    tasks_ = list_tasks(user, db)
+    claims_ = all_claims(user, db)
+    vacc = vaccination_coverage(db)
+    alerts_ = get_alerts(None, None, user, db)
+    fcst = fc.compare(db, days=7, ring_km=12.0)["summary"]
+    return {"generated_at": datetime.utcnow().isoformat(), "by": user.name,
+            "role": user.role, "summary": summ, "clusters": mp["clusters"],
+            "high_risk": [u for u in mp["units"] if u["band"] == "high"][:15],
+            "tasks_open": [t for t in tasks_ if t["status"] != "DONE"][:20],
+            "claims": {"pending": sum(1 for c in claims_ if c["status"] in ("FILED", "UNDER_REVIEW")),
+                       "approved": sum(1 for c in claims_ if c["status"] in ("APPROVED", "PAID")),
+                       "amount_approved": sum(c["amount"] for c in claims_
+                                              if c["status"] in ("APPROVED", "PAID"))},
+            "vaccination": vacc, "alerts": alerts_[:10], "forecast": fcst}
+
+
 # --------------------------------------------------------------------- demo --
 @app.post("/api/demo/advance")
 def demo_advance(user: User = Depends(current_user), db: Session = Depends(get_db)):
@@ -890,4 +1140,4 @@ app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

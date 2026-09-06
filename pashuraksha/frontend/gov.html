@@ -2,8 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#1B4C8C">
+<link rel="apple-touch-icon" href="/icons/apple-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PashuRaksha — Official Portal</title>
+<title>PashuAarogya — Official Portal</title>
 <link rel="stylesheet" href="/css/app.css">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
@@ -102,8 +108,8 @@ body{background:var(--paper)}
   <div class="inner">
     <div class="gov-emblem">🐄</div>
     <div>
-      <h1><span class="mr-name">पशुरक्षा</span> · PashuRaksha Portal</h1>
-      <div class="sub">पशुसंवर्धन विभाग, महाराष्ट्र शासन · Dept. of Animal Husbandry, Govt. of Maharashtra</div>
+      <h1><span class="mr-name">पशुआरोग्य</span> · PashuAarogya Portal</h1>
+      <div class="sub">पशुपालन विभाग, महाराष्ट्र शासन · Dept. of Animal Husbandry, Govt. of Maharashtra</div>
     </div>
     <div class="right">
       <div class="gov-clock" id="clock"></div>
@@ -117,7 +123,7 @@ body{background:var(--paper)}
 
 <div class="wrap" id="view"></div>
 
-<footer class="gov">पशुरक्षा · Government of Maharashtra · Surveillance data shown is a calibrated
+<footer class="gov">पशुआरोग्य · Government of Maharashtra · Surveillance data shown is a calibrated
   simulation for demonstration · Farmer identity is never exposed on public maps ·
   AI output is decision support — diagnosis remains with registered veterinarians</footer>
 
@@ -126,6 +132,7 @@ body{background:var(--paper)}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="/js/api.js"></script>
+<script src="/js/assistant.js"></script>
 <script src="/js/gov.js"></script>
 </body>
 </html>

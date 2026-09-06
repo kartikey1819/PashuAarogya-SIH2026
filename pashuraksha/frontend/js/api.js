@@ -107,3 +107,11 @@ function bandColor(b) {
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
+
+/* re-triggerable view entrance (stagger handled in CSS via .vin) */
+window.animView = (v) => {
+  if (!v) return;
+  v.classList.remove('vin');
+  void v.offsetWidth;          // reflow to restart animation
+  v.classList.add('vin');
+};
