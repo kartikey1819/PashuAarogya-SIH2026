@@ -1,10 +1,12 @@
-/* PashuRaksha Government Portal — light Maharashtra-govt theme.
+/* PashuAarogya Government Portal — light Maharashtra-govt theme.
    Sections: Overview · Action Queue · Claims · Campaigns · Reports */
 API.requireRole('block', 'district', 'state');
 document.getElementById('who').textContent = `${API.user.name}`;
 
 let map, layerGroup, trendChart, channelChart;
-let section = 'overview';
+let fmap, fLayer, fData = null, fDay = 7, fTimer = null, fChart = null;   // forecast state
+const _h = (location.hash || '').slice(1);
+let section = ['overview', 'forecast', 'tasks', 'claims', 'campaigns', 'reports'].includes(_h) ? _h : 'overview';
 let locCache = null;
 
 setInterval(() => {
@@ -15,6 +17,7 @@ setInterval(() => {
 
 const SECTIONS = [
   ['overview', '🗺️ Overview', 'निरीक्षण'],
+  ['forecast', '🔮 Forecast', 'अंदाज'],
   ['tasks', '📋 Action Queue', 'कार्य'],
   ['claims', '💰 Claims', 'नुकसान भरपाई'],
   ['campaigns', '💉 Campaigns', 'लसीकरण'],
@@ -22,7 +25,45 @@ const SECTIONS = [
 ];
 
 init();
-async function init() { renderNav(); render(); }
+async function init() { renderNav(); render(); initGovAssistant(); }
+
+/* पशु मित्र for officials: voice navigation + situational questions (Hindi default) */
+function initGovAssistant() {
+  const kw = PashuMitra.kw;
+  const go = k => { section = k; renderNav(); render(); };
+  const skills = [
+    { match: ql => kw(ql, ['अंदाज', 'पूर्वानुमान', 'forecast', 'भविष्य', 'क्या होगा', 'what if', 'रिंग']),
+      run: () => { go('forecast'); return { text: 'प्रसार पूर्वानुमान और रिंग-टीकाकरण योजना खोल रहा हूँ।' }; } },
+    { match: ql => kw(ql, ['कार्य', 'टास्क', 'task', 'action', 'काम', 'एक्शन']),
+      run: () => { go('tasks'); return { text: 'कार्य सूची खोली — हर क्लस्टर के लिए ज़िम्मेदार कार्रवाई।' }; } },
+    { match: ql => kw(ql, ['दावा', 'दावे', 'मुआवजा', 'भरपाई', 'claim']),
+      run: () => { go('claims'); return { text: 'मुआवजा दावे खोले।' }; } },
+    { match: ql => kw(ql, ['शिविर', 'टीका', 'अभियान', 'मोहीम', 'campaign', 'vaccin', 'लसीकरण']),
+      run: () => { go('campaigns'); return { text: 'टीकाकरण अभियान खोला।' }; } },
+    { match: ql => kw(ql, ['रिपोर्ट', 'sitrep', 'अहवाल', 'report', 'निर्यात', 'export']),
+      run: () => { go('reports'); return { text: 'रिपोर्ट अनुभाग खोला। SITREP यहीं से बनता है।',
+        actions: [{ label: '📄 SITREP बनाएं', run: () => location.href = '/sitrep.html' }] }; } },
+    { match: ql => kw(ql, ['कितने', 'कितनी', 'स्थिति', 'status', 'cluster', 'क्लस्टर', 'हालात', 'summary', 'सारांश', 'आज']),
+      run: async () => {
+        const s = await API.get('/api/dashboard/summary');
+        const m = await API.get('/api/dashboard/map?level=village');
+        const zoo = m.clusters.filter(c => c.zoonotic).length;
+        return { text: `अभी <b>${s.active_outbreaks}</b> सक्रिय क्लस्टर हैं${zoo ? ` (${zoo} ज़ूनोटिक — One Health सूचना जारी)` : ''}, 7 दिन में <b>${s.cases_7d}</b> रिपोर्ट और <b>${s.deaths_7d}</b> मृत्यु। <b>${s.high_risk_villages}</b> गाँव उच्च-जोखिम, टीकाकरण कवरेज ${Math.round(s.vaccination_coverage * 100)}%.`,
+                 actions: [{ label: '🗺️ नक्शा', run: () => go('overview') }] };
+      } },
+    { match: ql => kw(ql, ['अगला दिन', 'simulate', 'सिमुलेट', 'next day', 'आगे बढ़']),
+      run: async () => { go('overview'); setTimeout(() => document.getElementById('btnDemo')?.click(), 600);
+        return { text: 'अगले दिन की फील्ड रिपोर्ट सिमुलेट कर रहा हूँ — रडार फिर चलेगा।' }; } },
+    { match: ql => kw(ql, ['रडार', 'radar', 'स्कैन', 'scan', 'फिर से']),
+      run: async () => { const r = await API.post('/api/detect/run'); if (section === 'overview') refreshOverview();
+        return { text: `रडार दोबारा चलाया — ${r.clusters} सक्रिय क्लस्टर।` }; } },
+    { match: ql => kw(ql, ['नक्शा', 'map', 'overview', 'निरीक्षण', 'होम', 'home', 'मुख्य']),
+      run: () => { go('overview'); return { text: 'राज्य निरीक्षण नक्शा खोला।' }; } },
+  ];
+  PashuMitra.init({ page: 'gov', offsetBottom: 24, skills,
+    hint: 'बोलिए — जैसे "आज की स्थिति क्या है", "पूर्वानुमान दिखाओ", "SITREP"',
+    examples: ['आज की स्थिति क्या है?', 'पूर्वानुमान दिखाओ', 'मुआवजा दावे खोलो', 'SITREP रिपोर्ट', 'रडार फिर से चलाओ'] });
+}
 
 function renderNav(counts = {}) {
   const nav = document.getElementById('navtabs');
@@ -36,7 +77,9 @@ function renderNav(counts = {}) {
 }
 
 function render() {
-  ({ overview, tasks, claims, campaigns, reports })[section]();
+  if (fTimer) { clearInterval(fTimer); fTimer = null; }
+  ({ overview, forecast, tasks, claims, campaigns, reports })[section]();
+  animView(document.getElementById('view'));
 }
 
 /* helpers */
@@ -457,6 +500,126 @@ function renderCamps(camps) {
     : '<div class="muted">No camps scheduled</div>';
 }
 
+/* =============================== FORECAST ================================= */
+async function forecast() {
+  const view = document.getElementById('view');
+  view.innerHTML = `
+    <div class="section-head"><h2>Spread Forecast &amp; What-if Planner
+        <span class="mr">· प्रसार अंदाज व उपाय नियोजन</span></h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <label class="muted" style="font-size:12px">Ring-vaccination radius</label>
+        <select id="ringKm" style="width:auto;padding:8px 12px">
+          <option value="8">8 km</option><option value="12" selected>12 km</option>
+          <option value="20">20 km</option></select>
+        <label class="muted" style="font-size:12px">Horizon</label>
+        <select id="fDays" style="width:auto;padding:8px 12px">
+          <option value="7" selected>7 days</option><option value="14">14 days</option></select>
+        <button class="btn sm saffron" id="fRun">🔮 Run scenario</button></div></div>
+    <div class="panel-note">A transparent SEIR model on the village graph, seeded live from the
+      Outbreak Radar. It answers the question a Collector actually asks:
+      <b>"If we ring-vaccinate today, how many cases do we prevent — and how many doses do we need?"</b></div>
+    <div class="kpis" id="fkpis"></div>
+    <div class="grid two-col" style="grid-template-columns:1.5fr 1fr;margin-top:16px">
+      <div class="card" style="padding:12px">
+        <div id="fmap" style="height:480px;border-radius:12px;border:1px solid var(--hair)"></div>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:10px">
+          <button class="btn sm outline" id="fPlay">▶ Play</button>
+          <input type="range" id="fSlider" min="1" max="7" value="7" style="flex:1;padding:0">
+          <span class="mono" id="fDayLbl" style="min-width:130px;text-align:right;font-size:12px"></span></div>
+        <div class="legend">
+          <span><span class="sw" style="background:#C0392B"></span>Projected cases — no action</span>
+          <span><span class="sw" style="background:#1E7A46"></span>With ring vaccination</span>
+          <span><span class="sw" style="background:none;border:2px dashed #1B4C8C;border-radius:50%"></span>Ring zone</span></div></div>
+      <div>
+        <div class="card"><h3>Cumulative projected cases</h3><canvas id="fchart" height="210"></canvas></div>
+        <div class="card" style="margin-top:14px" id="fsummary"></div>
+      </div></div>`;
+  fmap = L.map('fmap').setView([19.55, 74.9], 8);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    { attribution: '© OpenStreetMap', maxZoom: 17 }).addTo(fmap);
+  fLayer = L.layerGroup().addTo(fmap);
+  document.getElementById('fRun').onclick = runForecast;
+  document.getElementById('fSlider').oninput = e => { fDay = +e.target.value; drawForecastDay(); };
+  document.getElementById('fPlay').onclick = playForecast;
+  runForecast();
+}
+
+async function runForecast() {
+  const ring = +document.getElementById('ringKm').value;
+  const days = +document.getElementById('fDays').value;
+  toast('🔮 Running spread model…');
+  fData = await API.get(`/api/forecast?days=${days}&ring_km=${ring}`);
+  const sl = document.getElementById('fSlider'); sl.max = days; sl.value = days; fDay = days;
+  const s = fData.summary, p = fData.baseline.params;
+  document.getElementById('fkpis').innerHTML = `
+    <div class="kpi crit"><div class="v">${Math.round(s.baseline_cases)}</div>
+      <div class="l">Projected cases · ${s.days} d · no action</div></div>
+    <div class="kpi ok"><div class="v">${Math.round(s.scenario_cases)}</div>
+      <div class="l">With ring vaccination · ${s.ring_km} km</div></div>
+    <div class="kpi ok"><div class="v">${Math.round(s.prevented)}</div>
+      <div class="l">Cases prevented (${s.prevented_pct}%)</div></div>
+    <div class="kpi"><div class="v">${s.ring_villages}</div><div class="l">Villages to vaccinate</div></div>
+    <div class="kpi warn"><div class="v">${s.doses_needed.toLocaleString('en-IN')}</div>
+      <div class="l">Doses needed (approx.)</div></div>`;
+  document.getElementById('fsummary').innerHTML = `<h3>Recommendation</h3>
+    <div style="font-size:14px">Authorise <b>ring vaccination within ${s.ring_km} km</b> of
+      ${fData.scenario.centers.map(c => `<b>${esc(c.name)}</b> (${esc(c.suspected)})`).join(', ')} today,
+      with movement control in the ring.
+      <div class="muted" style="font-size:12px;margin-top:8px">Model: β ${p.beta} · γ ${p.gamma} ·
+        kernel ${p.kernel_km} km · vaccine effect ${Math.round(p.vacc_effect * 100)}% after ${p.lag_days} d.
+        Every parameter is visible and editable in <code>backend/forecast.py</code>.
+        A planning aid, not a prediction.</div></div>`;
+  drawForecastChart(); drawForecastDay();
+}
+
+function drawForecastDay() {
+  if (!fData) return;
+  const b = fData.baseline.days[fDay - 1], sc = fData.scenario.days[fDay - 1];
+  document.getElementById('fDayLbl').textContent = `Day ${fDay} · ${b.date} · ${Math.round(b.cum)} vs ${Math.round(sc.cum)}`;
+  document.getElementById('fSlider').value = fDay;
+  fLayer.clearLayers();
+  fData.scenario.centers.forEach(c => L.circle([c.lat, c.lon], {
+    radius: fData.summary.ring_km * 1000, color: '#1B4C8C', fillOpacity: .03,
+    weight: 2, dashArray: '8 6' }).addTo(fLayer));
+  fData.baseline.villages.forEach(v => {
+    const nb = b.village_cum[v.id] || 0, ns = sc.village_cum[v.id] || 0;
+    if (nb < 0.3) return;
+    L.circleMarker([v.lat, v.lon], { radius: 4 + Math.min(24, Math.sqrt(nb) * 4.5),
+      color: '#C0392B', fillColor: '#C0392B', fillOpacity: .22, weight: 1 }).addTo(fLayer)
+      .bindTooltip(`<b>${esc(v.name)}</b><br>No action: ${nb.toFixed(1)} · Ring vaccination: ${ns.toFixed(1)}
+        ${v.in_ring ? '<br>💉 inside ring' : ''}`);
+    L.circleMarker([v.lat, v.lon], { radius: 4 + Math.min(24, Math.sqrt(ns) * 4.5),
+      color: '#1E7A46', fillColor: '#1E7A46', fillOpacity: .45, weight: 1.5 }).addTo(fLayer);
+  });
+}
+
+function playForecast() {
+  if (fTimer) { clearInterval(fTimer); fTimer = null; document.getElementById('fPlay').textContent = '▶ Play'; return; }
+  fDay = 1; drawForecastDay();
+  document.getElementById('fPlay').textContent = '⏸ Pause';
+  fTimer = setInterval(() => {
+    fDay++;
+    if (fDay > fData.baseline.days.length) { clearInterval(fTimer); fTimer = null;
+      document.getElementById('fPlay').textContent = '▶ Play'; return; }
+    drawForecastDay();
+  }, 550);
+}
+
+function drawForecastChart() {
+  if (fChart) fChart.destroy();
+  fChart = new Chart(document.getElementById('fchart'), {
+    type: 'line',
+    data: { labels: fData.baseline.days.map(d => 'D' + d.day),
+      datasets: [
+        { label: 'No action', data: fData.baseline.days.map(d => d.cum), borderColor: '#C0392B',
+          backgroundColor: 'rgba(192,57,43,.12)', fill: true, tension: .3, pointRadius: 2 },
+        { label: `Ring vaccination ${fData.summary.ring_km} km`, data: fData.scenario.days.map(d => d.cum),
+          borderColor: '#1E7A46', backgroundColor: 'rgba(30,122,70,.15)', fill: true, tension: .3, pointRadius: 2 }] },
+    options: { plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } }, x: { grid: { display: false } } } },
+  });
+}
+
 /* ================================ REPORTS ================================= */
 async function reports() {
   const view = document.getElementById('view');
@@ -466,7 +629,11 @@ async function reports() {
   const total = entries.reduce((s, [, v]) => s + v, 0) || 1;
   view.innerHTML = `
     <div class="section-head"><h2>Reports &amp; Evidence <span class="mr">· अहवाल व पुरावे</span></h2>
-      <button class="btn sm outline" onclick="window.print()">🖨 Print this page</button></div>
+      <div style="display:flex;gap:8px"><a class="btn sm saffron" href="/sitrep.html">📄 Generate SITREP</a>
+      <button class="btn sm outline" onclick="window.print()">🖨 Print this page</button></div></div>
+    <div class="panel-note">📄 <b>SITREP</b> = the one-page Situation Report a Collector or the state
+      war-room needs each morning: clusters, 7-day forecast with the recommended intervention,
+      high-risk villages, open actions, coverage and claims — auto-generated, printable, signable.</div>
     <div class="grid g3">
       <div class="card"><h3>Export datasets (CSV)</h3>
         <p class="muted" style="font-size:13px">For DAHD reporting, WOAH submissions and

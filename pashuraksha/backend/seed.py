@@ -123,8 +123,8 @@ def seed_all(db):
     home = by_block["Shevgaon"][0]
     ahm = db.query(Location).filter_by(name="Ahmednagar").first()
     demo_users = [
-        ("9000000001", "Ramesh Pawar", "farmer", home.id, "mr"),
-        ("9000000002", "Sunil Kamble", "field", home.parent_id, "mr"),
+        ("9000000001", "Ramesh Pawar", "farmer", home.id, "hi"),
+        ("9000000002", "Sunil Kamble", "field", home.parent_id, "hi"),
         ("9000000003", "Dr. Meera Kulkarni", "vet", home.parent_id, "en"),
         ("9000000004", "Anil Sathe", "lab", None, "en"),
         ("9000000005", "B.V.O. Shevgaon", "block", home.parent_id, "en"),
@@ -145,7 +145,7 @@ def seed_all(db):
             else:
                 u = User(phone=f"98{rng.randint(10000000, 99999999)}",
                          name=rng.choice(FARMER_NAMES), role="farmer",
-                         location_id=v.id, lang="mr")
+                         location_id=v.id, lang="hi")
                 db.add(u); db.flush()
             fm = Farmer(user_id=u.id, village_id=v.id)
             db.add(fm); db.flush()
@@ -249,10 +249,32 @@ def seed_all(db):
         db.add(s)
     # a treated + closed pair for history
     for c in lsd_cases[5:7]:
+        # link the case to one of the farmer's animals so the health passport
+        # shows a real treatment + milk-withdrawal countdown
+        if c.farmer_id and not c.animal_id:
+            an = db.query(Animal).filter(Animal.farmer_id == c.farmer_id).first()
+            if an:
+                c.animal_id = an.id
         db.add(Treatment(case_id=c.id, vet_id=vet.id,
                          diagnosis="LSD — clinical", treatment="Supportive: NSAID, "
-                         "antiseptic dressing of nodules, fly control advised"))
+                         "oxytetracycline LA, antiseptic dressing, fly control advised",
+                         withdrawal_days=5,
+                         given_at=datetime.utcnow() - timedelta(days=1)))
         c.status = "TREATMENT" if c is lsd_cases[5] else "CLOSED"
+    # demo farmer: give him one treated animal too (passport demo)
+    demo_fm = db.query(Farmer).filter(Farmer.user_id == demo_farmer_user.id).first()
+    if demo_fm:
+        my_case = (db.query(Case).filter(Case.farmer_id == demo_fm.id)
+                     .order_by(Case.reported_at.desc()).first())
+        my_animal = db.query(Animal).filter(Animal.farmer_id == demo_fm.id).first()
+        if my_case and my_animal:
+            my_case.animal_id = my_animal.id
+            my_case.status = "TREATMENT"
+            db.add(Treatment(case_id=my_case.id, vet_id=vet.id,
+                             diagnosis="Suspected LSD — clinical",
+                             treatment="Oxytetracycline LA + meloxicam; isolate; fly control",
+                             withdrawal_days=7,
+                             given_at=datetime.utcnow() - timedelta(days=2)))
 
     # -------------------------------------------------- claims (the loop) ---
     # Farmer with a death files a claim; three stages visible on first load

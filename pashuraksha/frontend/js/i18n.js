@@ -32,6 +32,14 @@ const I18N = {
     weather_today: "आजचे हवामान", claim_eligible: "भरपाईस पात्र",
     no_claims: "अद्याप दावे नाहीत", camp_near_you: "तुमच्या भागात लसीकरण शिबिर",
     what_to_do: "काय करावे", free: "मोफत", amount: "रक्कम",
+    lens_title: "फोटोने जनावर ओळखा", lens_hint: "गाय/म्हशीचा बाजूने फोटो घ्या — AI जात व प्रकार ओळखेल",
+    take_photo: "फोटो घ्या", identifying: "ओळखत आहे", breeds: "जाती", ai_offline: "AI बंद",
+    register_animal: "नोंदणी करा", retake: "पुन्हा फोटो घ्या", passport: "पासपोर्ट",
+    milk_withdrawal: "दूध विकू नका", permit_ALLOWED: "वाहतूक ठीक", permit_BLOCKED: "वाहतूक बंद",
+    permit_HOLD: "वाहतूक थांबवा", listen: "ऐका", confidence: "खात्री",
+    ai_low_conf: "खात्री कमी — संकरित असू शकते; पशुवैद्य तपासतील",
+    ai_not_running: "AI सेवा सध्या उपलब्ध नाही — हाताने नोंदणी करा", manual_register: "हाताने नोंदणी",
+    registered: "जनावराची नोंदणी झाली",
   },
   hi: {
     app_name: "पशुरक्षा", tagline: "पशुधन स्वास्थ्य सुरक्षा प्रणाली",
@@ -65,6 +73,14 @@ const I18N = {
     weather_today: "आज का मौसम", claim_eligible: "मुआवजे के योग्य",
     no_claims: "अभी कोई दावा नहीं", camp_near_you: "आपके क्षेत्र में टीकाकरण शिविर",
     what_to_do: "क्या करें", free: "मुफ्त", amount: "राशि",
+    lens_title: "फोटो से पशु पहचानें", lens_hint: "गाय/भैंस की बगल से फोटो लें — AI नस्ल व प्रकार पहचानेगा",
+    take_photo: "फोटो लें", identifying: "पहचान रहा है", breeds: "नस्लें", ai_offline: "AI बंद",
+    register_animal: "पंजीकरण करें", retake: "फिर से फोटो लें", passport: "पासपोर्ट",
+    milk_withdrawal: "दूध न बेचें", permit_ALLOWED: "आवाजाही ठीक", permit_BLOCKED: "आवाजाही बंद",
+    permit_HOLD: "आवाजाही रोकें", listen: "सुनें", confidence: "भरोसा",
+    ai_low_conf: "भरोसा कम — संकर हो सकता है; पशु चिकित्सक जांचेंगे",
+    ai_not_running: "AI सेवा अभी उपलब्ध नहीं — हाथ से पंजीकरण करें", manual_register: "हाथ से पंजीकरण",
+    registered: "पशु पंजीकृत हुआ",
   },
   en: {
     app_name: "PashuRaksha", tagline: "Livestock Health Protection System",
@@ -98,9 +114,17 @@ const I18N = {
     weather_today: "Today's weather", claim_eligible: "Eligible for compensation",
     no_claims: "No claims yet", camp_near_you: "Vaccination camp in your area",
     what_to_do: "What to do", free: "FREE", amount: "Amount",
+    lens_title: "Identify animal by photo", lens_hint: "Photograph the cow/buffalo from the side — AI identifies breed & type",
+    take_photo: "Take photo", identifying: "Identifying", breeds: "breeds", ai_offline: "AI offline",
+    register_animal: "Register animal", retake: "Retake photo", passport: "Passport",
+    milk_withdrawal: "Do not sell milk", permit_ALLOWED: "Movement OK", permit_BLOCKED: "Movement blocked",
+    permit_HOLD: "Movement on hold", listen: "Listen", confidence: "Confidence",
+    ai_low_conf: "Low confidence — may be crossbred; a vet can verify",
+    ai_not_running: "AI service not running — register manually", manual_register: "Register manually",
+    registered: "Animal registered",
   },
 };
-let LANG = localStorage.getItem('pr_lang') || 'mr';
+let LANG = localStorage.getItem('pr_lang') || 'hi';   // Hindi default; Marathi/English on toggle
 function t(key) { return (I18N[LANG] && I18N[LANG][key]) || I18N.en[key] || key; }
 function setLang(l) { LANG = l; localStorage.setItem('pr_lang', l); }
 

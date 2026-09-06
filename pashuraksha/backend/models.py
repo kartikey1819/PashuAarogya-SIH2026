@@ -28,7 +28,7 @@ class User(Base):
     name = Column(String, nullable=False)
     role = Column(String, nullable=False)  # farmer|field|vet|lab|block|district|state
     location_id = Column(Integer, ForeignKey("locations.id"))
-    lang = Column(String, default="mr")
+    lang = Column(String, default="hi")     # Hindi default; mr/en selectable
     location = relationship("Location")
 
 
@@ -110,6 +110,7 @@ class Treatment(Base):
     diagnosis = Column(String)
     treatment = Column(Text)
     given_at = Column(DateTime, default=datetime.utcnow)
+    withdrawal_days = Column(Integer, default=0)   # milk/meat withdrawal (food safety)
 
 
 class Sample(Base):

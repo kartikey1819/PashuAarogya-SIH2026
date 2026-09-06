@@ -2,8 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#1B4C8C">
+<link rel="apple-touch-icon" href="/icons/apple-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PashuRaksha AI</title>
+<title>PashuAarogya AI</title>
 <link rel="stylesheet" href="/css/app.css">
 <style>
 body{background:var(--paper)}
@@ -50,7 +56,7 @@ body{background:var(--paper)}
 .rlabel::before,.rlabel::after{content:'';flex:1;height:1px;background:var(--hair)}
 .rolegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:13px}
 .rolecard{background:#fff;border:1.5px solid var(--hair);border-radius:15px;padding:20px;
-  text-align:left;transition:all .16s;cursor:pointer;
+  text-align:left;cursor:pointer;
   box-shadow:0 1px 3px rgba(28,36,52,.05),0 10px 24px -16px rgba(28,36,52,.15)}
 .rolecard:hover{border-color:var(--saffron);transform:translateY(-3px);
   box-shadow:0 4px 8px rgba(232,114,12,.08),0 18px 36px -14px rgba(232,114,12,.25)}
@@ -73,6 +79,22 @@ body{background:var(--paper)}
 
 footer.lite{border-top:1px solid var(--hair);margin-top:56px;padding:20px;text-align:center;
   font-size:11.5px;color:var(--muted);line-height:1.6;background:#fff}
+
+/* innovations */
+.inno{max-width:1240px;margin:44px auto 0;padding:0 24px}
+.innogrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.ino{background:#fff;border:1px solid var(--hair);border-radius:16px;padding:20px 20px 18px;position:relative;
+  overflow:hidden;box-shadow:0 1px 3px rgba(28,36,52,.05),0 12px 28px -18px rgba(28,36,52,.18)}
+.ino::before{content:'';position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--saffron)}
+.ino:nth-child(2n)::before{background:var(--navy)}
+.ino:nth-child(3n)::before{background:var(--green)}
+.ino .k{font-family:var(--f-m);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.ino .em{font-size:30px;line-height:1}
+.ino h4{font-family:var(--f-d);font-size:19px;margin:8px 0 6px;color:var(--ink);letter-spacing:.01em}
+.ino p{font-size:13.5px;color:var(--muted);line-height:1.5;margin:0}
+.ino p b{color:var(--ink)}
+.ino .tag{position:absolute;right:14px;top:14px;font-family:var(--f-m);font-size:9.5px;letter-spacing:.08em;
+  color:var(--green);background:var(--green-soft);padding:3px 8px;border-radius:99px;font-weight:600}
 </style>
 </head>
 <body>
@@ -81,8 +103,8 @@ footer.lite{border-top:1px solid var(--hair);margin-top:56px;padding:20px;text-a
   <div class="inner">
     <div class="embl">🐄</div>
     <div>
-      <h1><span class="mr">पशुरक्षा</span> · PashuRaksha AI</h1>
-      <div class="sub">पशुसंवर्धन विभाग, महाराष्ट्र शासन · Dept. of Animal Husbandry &amp; Dairying, Govt. of Maharashtra</div>
+      <h1><span class="mr">पशुआरोग्य</span> · PashuAarogya AI</h1>
+      <div class="sub">पशुपालन विभाग, महाराष्ट्र शासन · Dept. of Animal Husbandry &amp; Dairying, Govt. of Maharashtra</div>
     </div>
     <span class="pill">SIH · PS 26128</span>
   </div>
@@ -110,6 +132,37 @@ footer.lite{border-top:1px solid var(--hair);margin-top:56px;padding:20px;text-a
   </div>
 </section>
 
+<section class="inno">
+  <div class="rlabel">What makes it different · सहा नवकल्पना</div>
+  <div class="innogrid">
+    <div class="ino"><span class="tag">REAL MODEL</span><div class="k">01 · Pashu Lens</div><div class="em">📸</div>
+      <h4>AI identifies the animal from a photo</h4>
+      <p>EfficientNetV2 trained on <b>50 Indian cattle &amp; buffalo breeds</b>, with a subject gate that refuses
+        non-animals and a quality gate that asks for a retake. Registration in one tap — aligned to
+        Bharat Pashudhan's image-based classification agenda.</p></div>
+    <div class="ino"><span class="tag">EPIDEMIOLOGY</span><div class="k">02 · Outbreak Radar</div><div class="em">📡</div>
+      <h4>Statistical cluster detection, not a dot map</h4>
+      <p>Space-time scan with Poisson p-values flags a village cluster <b>days before deaths pile up</b>, names the
+        suspected disease, raises One Health notices for zoonoses and auto-creates owned response tasks.</p></div>
+    <div class="ino"><span class="tag">PRESCRIPTIVE</span><div class="k">03 · What-if Planner</div><div class="em">🔮</div>
+      <h4>"Ring-vaccinate today → how many cases prevented?"</h4>
+      <p>A transparent SEIR model on the village graph animates the next 7 days and compares
+        <b>no action vs ring vaccination</b>, with doses needed — the decision a Collector actually has to make.</p></div>
+    <div class="ino"><span class="tag">CONTAINMENT</span><div class="k">04 · Health Passport + Movement Permit</div><div class="em">🪪</div>
+      <h4>A QR that stops a sick village selling into a clean one</h4>
+      <p>Every animal gets a scannable passport: vaccinations, treatments, <b>milk-withdrawal countdown</b> and a
+        live movement permit computed from the Radar — enforced at checkposts and markets.</p></div>
+    <div class="ino"><span class="tag">INCLUSION</span><div class="k">05 · Pashu Mitra voice</div><div class="em">🗣️</div>
+      <h4>Speak in Marathi. It answers in Marathi.</h4>
+      <p>Voice symptom capture, triage result and the advisory <b>read aloud</b>, IVR-1962 keypad path and an SMS
+        codec — a farmer who cannot read or has no data is still a first-class reporter.</p></div>
+    <div class="ino"><span class="tag">INCENTIVE</span><div class="k">06 · Reporting pays</div><div class="em">💰</div>
+      <h4>The case record is the compensation claim</h4>
+      <p>Farmers hide outbreaks because reporting triggers culling. Here a death report becomes a
+        <b>one-tap compensation claim</b> officers approve in the portal — earlier reporting, earlier detection.</p></div>
+  </div>
+</section>
+
 <div class="rw">
   <div class="rlabel">Select a role to enter · सर्व डेमो लॉगिनसाठी OTP 123456</div>
   <div class="rolegrid" id="roles"></div>
@@ -127,9 +180,16 @@ footer.lite{border-top:1px solid var(--hair);margin-top:56px;padding:20px;text-a
       <button class="btn-go green" onclick="verifyOTP()">Verify &amp; enter →</button>
     </div>
   </div>
+  <div class="login-box" id="phoneBox" style="margin-top:16px;text-align:center;display:none">
+    <h3 style="justify-content:center">📱 Open on your phone · मोबाइलवर उघडा</h3>
+    <div id="qr" style="display:flex;justify-content:center;margin:6px 0 10px"></div>
+    <div class="mono" style="font-size:12px;color:var(--muted)" id="lanurl"></div>
+    <div class="muted" style="font-size:11.5px;margin-top:8px">Same Wi-Fi → scan → in Chrome choose
+      <b>“Add to Home screen”</b> — it installs like an Android app and works offline.</div>
+  </div>
 </div>
 
-<footer class="lite">पशुरक्षा AI — Smart India Hackathon prototype · Problem Statement 26128 ·
+<footer class="lite">पशुआरोग्य AI — Smart India Hackathon prototype · Problem Statement 26128 ·
   Maharashtra State Innovation Society<br>
   AI output is decision support only — diagnosis &amp; treatment remain with registered veterinary
   practitioners · Farmer identity is never exposed on public maps</footer>
@@ -197,6 +257,22 @@ function countTo(id, target) {
     countTo('st-animals', 784); countTo('st-clusters', 4);
     countTo('st-cases', 97); countTo('st-vacc', 71);
   }
+})();
+
+/* LAN QR — lets a phone on the same Wi-Fi open + install the app */
+(async () => {
+  try {
+    const h = await fetch('/api/hostinfo').then(r => r.json());
+    if (!h.urls || !h.urls.length) return;
+    const url = h.urls[0];
+    document.getElementById('lanurl').textContent = url;
+    document.getElementById('phoneBox').style.display = 'block';
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+    s.onload = () => new QRCode(document.getElementById('qr'),
+      { text: url, width: 148, height: 148, colorDark: '#123566' });
+    document.head.appendChild(s);
+  } catch (e) {}
 })();
 </script>
 </body>

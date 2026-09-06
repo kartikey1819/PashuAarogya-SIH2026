@@ -1,9 +1,15 @@
 <!doctype html>
-<html lang="mr">
+<html lang="hi">
 <head>
 <meta charset="utf-8">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#1B4C8C">
+<link rel="apple-touch-icon" href="/icons/apple-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>पशुरक्षा — 1962 IVR Simulator</title>
+<title>पशुआरोग्य — 1962 IVR Simulator</title>
 <link rel="stylesheet" href="/css/app.css">
 <style>
   body{background:#0B2A54;display:flex;align-items:center;justify-content:center;
@@ -27,7 +33,7 @@
 <div class="phone">
   <div class="callbar">
     <div><div class="num">📞 1962</div>
-      <div style="color:#6C7A96;font-size:11px">पशु आपत्कालीन सेवा · toll-free</div></div>
+      <div style="color:#6C7A96;font-size:11px">पशु आपातकालीन सेवा · toll-free</div></div>
     <button class="hang" onclick="location.href='/farmer.html'">✕</button>
   </div>
   <div class="screen" id="screen"></div>
@@ -55,10 +61,10 @@ const SY = { 1: ['fever'], 2: ['nodules', 'fever'], 3: ['oral_lesions', 'salivat
              4: ['diarrhoea'], 5: ['sudden_death'], 6: ['lameness', 'swelling'] };
 
 const SCRIPTS = [
-  `नमस्कार! पशुरक्षा 1962 सेवेत आपले स्वागत आहे.\n\nजनावराचा प्रकार निवडा:\n 1 → गाय (cattle)\n 2 → म्हैस (buffalo)\n 3 → शेळी (goat)\n 4 → मेंढी (sheep)`,
-  `मुख्य लक्षण निवडा:\n 1 → ताप (fever)\n 2 → अंगावर गाठी (nodules)\n 3 → तोंडात फोड / लाळ\n 4 → जुलाब\n 5 → अचानक मृत्यू ⚠\n 6 → लंगडेपणा / सूज`,
-  `किती जनावरे आजारी आहेत?\nसंख्या दाबा (1–9)`,
-  `एखादे जनावर मरण पावले का?\n 1 → होय\n 2 → नाही`,
+  `नमस्ते! पशुआरोग्य 1962 सेवा में आपका स्वागत है।\n\nपशु का प्रकार चुनें:\n 1 → गाय (cattle)\n 2 → भैंस (buffalo)\n 3 → बकरी (goat)\n 4 → भेड़ (sheep)`,
+  `मुख्य लक्षण चुनें:\n 1 → बुखार (fever)\n 2 → शरीर पर गांठें (nodules)\n 3 → मुंह में छाले / लार\n 4 → दस्त\n 5 → अचानक मृत्यु ⚠\n 6 → लंगड़ापन / सूजन`,
+  `कितने पशु बीमार हैं?\nसंख्या दबाएं (1–9)`,
+  `क्या कोई पशु मर गया?\n 1 → हाँ\n 2 → नहीं`,
 ];
 
 function show(extra) { screen.textContent = (SCRIPTS[step] || '') + (extra || ''); }
@@ -72,21 +78,21 @@ async function press(k) {
   else if (step === 3 && (n === 1 || n === 2)) {
     sel.dead = n === 1 ? 1 : 0;
     if (sel.dead) sel.symptom = [...new Set([...sel.symptom, 'sudden_death'])];
-    screen.textContent = 'तक्रार नोंदवत आहोत...\nसंपर्क जोडला जात आहे...';
+    screen.textContent = 'रिपोर्ट दर्ज हो रही है...\nकनेक्ट किया जा रहा है...';
     try {
       const res = await API.post('/api/reports', {
         species: sel.species, symptoms: sel.symptom,
         affected_count: sel.count, dead_count: sel.dead, channel: 'ivr',
         client_uuid: 'ivr-' + Date.now(),
       });
-      const band = { high: 'गंभीर 🚨 — पशुवैद्य तातडीने येतील',
-                     medium: 'मध्यम ⚠ — २४ तासांत भेट', low: 'सौम्य ✅' }[res.triage_band];
+      const band = { high: 'गंभीर 🚨 — पशु चिकित्सक तुरंत आएंगे',
+                     medium: 'मध्यम ⚠ — 24 घंटे में भेंट', low: 'हल्का ✅' }[res.triage_band];
       screen.textContent =
-        `✅ तक्रार नोंदवली गेली!\n\nकेस क्रमांक: #${res.id}\nस्थिती: ${band}\n\n` +
-        `जनावर वेगळे बांधा.\nगावाबाहेर जनावरे नेऊ नका.\n\nधन्यवाद. 🙏\n(कॉल समाप्त — ✕ दाबा)`;
+        `✅ रिपोर्ट दर्ज हो गई!\n\nकेस संख्या: #${res.id}\nस्थिति: ${band}\n\n` +
+        `पशु को अलग बांधें।\nगांव से बाहर पशु न ले जाएं।\n\nधन्यवाद। 🙏\n(कॉल समाप्त — ✕ दबाएं)`;
     } catch (e) {
-      screen.textContent = '⚠ नोंदणी अयशस्वी: ' + e.message +
-        '\n\n(लॉगिन आवश्यक — प्रथम शेतकरी म्हणून लॉगिन करा)';
+      screen.textContent = '⚠ दर्ज नहीं हो सका: ' + e.message +
+        '\n\n(लॉगिन आवश्यक — पहले किसान के रूप में लॉगिन करें)';
     }
     step = 4;
   }

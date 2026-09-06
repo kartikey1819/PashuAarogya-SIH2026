@@ -2,10 +2,11 @@
    Strategy: network-first for same-origin shell assets (always fresh during
    demos), falling back to cache when offline. API calls: network-only — the
    report queue in api.js handles offline writes. */
-const CACHE = 'pashuraksha-v4';
+const CACHE = 'pashuraksha-v7';
 const SHELL = ['/', '/index.html', '/farmer.html', '/vet.html', '/gov.html',
-               '/ivr.html', '/css/app.css', '/css/gov.css', '/js/api.js',
-               '/js/i18n.js', '/js/farmer.js', '/js/vet.js', '/js/gov.js'];
+               '/ivr.html', '/passport.html', '/sitrep.html', '/css/app.css', '/js/api.js',
+               '/js/i18n.js', '/js/assistant.js', '/js/farmer.js', '/js/vet.js', '/js/gov.js',
+               '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

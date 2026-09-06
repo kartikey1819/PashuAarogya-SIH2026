@@ -6,3 +6,7 @@ env/
 node_modules/
 .env
 .DS_Store
+
+# runtime artefacts
+*.db
+*.log

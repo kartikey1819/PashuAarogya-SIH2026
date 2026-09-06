@@ -8,7 +8,8 @@ let tab = API.user.role === 'lab' ? 'lab' : 'queue';
 const view = document.getElementById('view');
 
 const TABS = [
-  ['queue', '📋 Case Queue'], ['lab', '🧪 Samples & Lab'], ['alerts', '🔔 Alerts'],
+  ['queue', '📋 Case Queue'], ['tasks', '🚑 My Tasks'],
+  ['lab', '🧪 Samples & Lab'], ['alerts', '🔔 Alerts'],
 ];
 
 init();
@@ -25,7 +26,7 @@ function renderTabs() {
     tabs.appendChild(b);
   });
 }
-function render() { ({ queue, lab, alerts })[tab](); }
+function render() { ({ queue, lab, alerts, tasks })[tab](); animView(view); }
 
 /* ------------------------------- CASE QUEUE ------------------------------- */
 async function queue() {
@@ -105,6 +106,9 @@ function caseModal(c) {
       <label class="muted" style="font-size:12.5px">Clinical diagnosis & treatment (vet only)</label>
       <input id="dx" placeholder="Diagnosis (e.g. LSD — clinical)" style="margin:6px 0">
       <textarea id="tx" rows="2" placeholder="Treatment given / prescribed"></textarea>
+      <label class="muted" style="font-size:12px;display:block;margin-top:6px">🥛 Milk/meat withdrawal period (days) —
+        farmer gets a countdown in the app &amp; on the animal's passport</label>
+      <input id="wd" type="number" min="0" max="60" value="0" style="width:120px;margin:4px 0">
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn sm green" data-a="treat">💊 Record treatment</button>
         <button class="btn sm outline" data-a="close">✓ Close case</button>
@@ -123,6 +127,7 @@ function caseModal(c) {
           action: a,
           diagnosis: document.getElementById('dx')?.value || '',
           treatment: document.getElementById('tx')?.value || '',
+          withdrawal_days: parseInt(document.getElementById('wd')?.value || '0', 10) || 0,
           escalate_to: 'block',
         });
         toast(`Case #${c.id}: ${a} ✓`, 'ok');
@@ -219,6 +224,56 @@ async function publishResult(s, result, disease) {
       : `${s.code} negative — case cleared`, result === 'positive' ? 'err' : 'ok');
     render();
   } catch (e) { toast(e.message, 'err'); }
+}
+
+/* -------------------------------- MY TASKS -------------------------------- */
+const TASK_IC = { mvu_dispatch: '🚑', sample_collection: '🧪',
+                  ring_vaccination: '💉', verification: '🔍' };
+async function tasks() {
+  view.innerHTML = '<div class="muted">Loading…</div>';
+  let rows = [];
+  try { rows = await API.get('/api/tasks'); } catch (e) { view.innerHTML = esc(e.message); return; }
+  const myRole = API.user.role === 'field' ? 'vet' : API.user.role;  // field works vet tasks
+  const mine = rows.filter(x => x.assigned_role === myRole || x.assigned_role === API.user.role);
+  const open = mine.filter(x => x.status !== 'DONE');
+  view.innerHTML = '';
+  const kpis = el('div', 'kpis');
+  kpis.innerHTML = `
+    <div class="kpi ${open.length ? 'warn' : 'ok'}"><div class="v">${open.length}</div>
+      <div class="l">Open field tasks</div></div>
+    <div class="kpi ok"><div class="v">${mine.filter(x => x.status === 'DONE').length}</div>
+      <div class="l">Completed</div></div>`;
+  view.appendChild(kpis);
+  const card = el('div', 'card'); card.style.marginTop = '16px';
+  card.innerHTML = `<h3>Dispatch &amp; containment tasks
+    <span class="muted" style="font-weight:400;text-transform:none;font-family:var(--f-b);
+    font-size:12px">— auto-created by the Outbreak Radar; completing them is the containment record.</span></h3>`;
+  if (!mine.length) card.appendChild(el('div', 'muted', 'No tasks assigned to your role.'));
+  mine.forEach(x => {
+    const d = el('div', '', `
+      <div style="display:flex;gap:12px;align-items:flex-start;padding:11px 0;
+        border-bottom:1px solid var(--surface-2);${x.status === 'DONE' ? 'opacity:.5' : ''}">
+        <span style="font-size:22px">${TASK_IC[x.kind] || '📌'}</span>
+        <div style="flex:1"><b style="font-size:14px">${esc(x.title)}</b>
+          <div class="mono" style="font-size:10.5px;color:var(--muted);margin-top:3px">
+            📍 ${esc(x.village || '')} · ${fmtDT(x.created_at)} ·
+            <span class="chip ${x.status === 'DONE' ? 'low' : x.status === 'IN_PROGRESS' ? 'medium' : 'info'}">${x.status}</span></div></div>
+        <span class="acts" style="display:flex;gap:6px;flex:0 0 auto"></span></div>`);
+    const acts = d.querySelector('.acts');
+    if (x.status === 'OPEN') {
+      const b = el('button', 'btn sm outline', 'Start');
+      b.onclick = async () => { await API.post('/api/tasks/' + x.id, { status: 'IN_PROGRESS' }); render(); };
+      acts.appendChild(b);
+    }
+    if (x.status !== 'DONE') {
+      const b = el('button', 'btn sm green', '✓ Done');
+      b.onclick = async () => { await API.post('/api/tasks/' + x.id, { status: 'DONE' });
+        toast('Task completed ✓', 'ok'); render(); };
+      acts.appendChild(b);
+    }
+    card.appendChild(d);
+  });
+  view.appendChild(card);
 }
 
 /* --------------------------------- ALERTS --------------------------------- */

@@ -1,7 +1,71 @@
-# पशुरक्षा · PashuRaksha AI
+# पशुआरोग्य · PashuAarogya AI
 
 **Livestock Disease Early-Warning, Surveillance & Response Platform**
 SIH Problem Statement 26128 · Government of Maharashtra · MSInS
+
+## ✨ The six innovations (what to demo, in this order)
+
+| # | Feature | Where | The 15-second demo |
+|---|---|---|---|
+| 1 | **📸 Pashu Lens** — real EfficientNetV2 breed/type identification (50 Indian breeds, subject + quality gates), ported from PashuPehchaan | Farmer → जनावरे | Photograph a cow → breed in Marathi with confidence → one-tap register |
+| 2 | **📡 Outbreak Radar** — space-time scan statistics, One Health flag, auto-tasks | Portal → Overview | Point at the p-value; open the anthrax cluster's ☣ notice |
+| 3 | **🔮 What-if Planner** — SEIR forecast, ring-vaccination scenario, doses needed | Portal → Forecast | Press ▶ Play; read "cases prevented" |
+| 4 | **🪪 Health Passport + Movement Permit** — QR per animal, milk-withdrawal countdown, live permit | Farmer → 🪪 / `/passport.html?tag=…` | Scan → **BLOCKED: inside LSD zone** |
+| 5 | **🗣️ Pashu Mitra** — voice in, voice out, IVR, SMS | Farmer → तक्रार | Speak Marathi → hear the triage read back |
+| 6 | **💰 Reporting pays** — case record → compensation claim → officer approval | Farmer → सेवा · Portal → Claims | Approve → farmer sees ✅ instantly |
+
+Plus **📄 SITREP** (Portal → Reports): the one-page morning Situation Report, auto-generated and printable.
+
+### 🎙️ पशु मित्र — the voice assistant (Hindi by default)
+The orange mic button on every screen opens a conversational assistant: speak or
+type in Hindi (Marathi/English on the language toggle). It understands intents,
+answers with voice, and acts:
+- Farmer: *"मेरी गाय बीमार है, बुखार और गांठें हैं"* → starts the report with the
+  species and symptoms pre-filled · *"टीकाकरण शिविर कब है?"* · *"मुआवजे का क्या हुआ?"* ·
+  *"लम्पी रोग क्या है?"* · *"आज का मौसम"* · *"मदद / 1962"*
+- Officials: *"आज की स्थिति?"* (reads the live summary) · *"पूर्वानुमान दिखाओ"* ·
+  *"दावे खोलो"* · *"SITREP"* · *"रडार फिर से चलाओ"* · *"अगला दिन सिमुलेट करो"*
+Rule-based intent routing — no cloud LLM, so navigation and help work offline.
+Language default is **Hindi everywhere** (`pr_lang`), with मराठी / English one tap away.
+
+### Pashu Lens AI sidecar
+`run.bat` starts it automatically if the PashuPehchaan model is present at
+`C:\Users\admin\Desktop\BreedVision18\Breed-Vision-main\breed-ai-service`
+(override with the `PASHU_AI_DIR` environment variable). It runs on port 8001;
+the platform proxies it at `/api/ai/identify` and **degrades honestly** when
+the sidecar is off ("AI service not running — register manually").
+Manual start: `cd <that folder> && .venv\Scripts\python -m uvicorn app:app --port 8001`.
+
+## 📱 Run it as an Android app (installable PWA — works today)
+
+1. Start the server (`run.bat` / `npm run dev`). It listens on your LAN.
+2. On the login page a **"Open on your phone"** QR appears — scan it with a
+   phone on the same Wi-Fi (or type the `http://<your-ip>:8000` URL shown).
+   If the phone can't connect, allow Python through Windows Firewall
+   (private networks) when prompted.
+3. In Chrome on the phone: menu → **"Add to Home screen"** → Install.
+   It launches full-screen with the पशुआरोग्य icon, works offline, and
+   queues reports for sync — exactly the PS's low-connectivity requirement.
+
+**Packaged APK path (post-hackathon):** the frontend is framework-free, so
+wrapping is mechanical — Capacitor (`npx cap init && npx cap add android`
+with `webDir: frontend`) or a Trusted Web Activity via
+`bubblewrap init --manifest https://<host>/manifest.webmanifest` once hosted
+on HTTPS. No code changes required either way.
+
+## 🦠 Disease coverage (aligned to the Bharat Pashudhan "1962 Farmers App" / LHDCP scope)
+
+| Category | Diseases in the knowledge base |
+|---|---|
+| Cattle & Buffalo | LSD, FMD, HS (घटसर्प), BQ (फऱ्या), Theileriosis, Babesiosis, Mastitis |
+| Goat & Sheep | PPR, Sheep & Goat Pox, Enterotoxaemia |
+| Poultry | Ranikhet (Newcastle), Avian Influenza |
+| Pig | Classical Swine Fever |
+| Zoonotic (One Health) | Anthrax, Brucellosis, Rabies, Avian Influenza |
+| General | Mange |
+
+All 17 live in `backend/rules/diseases.yaml` (hot-reloaded) with Marathi/Hindi
+names, sign-weighted triage rules, seasonality and farmer action advisories.
 
 One platform connecting **Farmer → Field Worker → Veterinarian → Laboratory →
 Block / District / State authority**, turning field observations into risk
