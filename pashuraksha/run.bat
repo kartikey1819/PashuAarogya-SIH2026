@@ -19,7 +19,11 @@ cd /d "%~dp0backend"
 echo Installing dependencies (first run only)...
 python -m pip install -q -r ..\requirements.txt
 echo.
-echo Starting PashuAarogya at http://127.0.0.1:8000  (LAN: see QR on login page)
+echo Starting public HTTPS link (ngrok reserved domain / cloudflared) ...
+start "PashuAarogya - public link" /min cmd /c "cd /d "%~dp0" && python tunnel.py"
+echo.
+echo Starting PashuAarogya at http://127.0.0.1:8000
+echo   Phone: scan the QR on the login page - public HTTPS link, no shared Wi-Fi needed.
 echo Demo OTP for every login: 123456
 echo.
 start "" http://127.0.0.1:8000

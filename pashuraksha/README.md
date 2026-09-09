@@ -36,16 +36,23 @@ the platform proxies it at `/api/ai/identify` and **degrades honestly** when
 the sidecar is off ("AI service not running — register manually").
 Manual start: `cd <that folder> && .venv\Scripts\python -m uvicorn app:app --port 8001`.
 
-## 📱 Run it as an Android app (installable PWA — works today)
+## 📱 Run it on a phone — from anywhere, no shared Wi-Fi
 
-1. Start the server (`run.bat` / `npm run dev`). It listens on your LAN.
-2. On the login page a **"Open on your phone"** QR appears — scan it with a
-   phone on the same Wi-Fi (or type the `http://<your-ip>:8000` URL shown).
-   If the phone can't connect, allow Python through Windows Firewall
-   (private networks) when prompted.
+1. `run.bat` starts the platform **and a public HTTPS tunnel** (`tunnel.py`):
+   ngrok with the reserved domain **https://onset-jasmine-eagle.ngrok-free.dev**
+   (permanent), or a Cloudflare quick tunnel as fallback. Manual: `npm run tunnel`.
+2. The login page QR switches to that public link automatically — scan it on
+   **any** network, mobile data included. First visit shows ngrok's one-time
+   "Visit Site" page; tap it.
 3. In Chrome on the phone: menu → **"Add to Home screen"** → Install.
    It launches full-screen with the पशुआरोग्य icon, works offline, and
-   queues reports for sync — exactly the PS's low-connectivity requirement.
+   queues reports for sync. HTTPS is also what unlocks the **microphone**
+   (voice assistant), **camera** and PWA install on Android — a plain
+   `http://192.168.x.x` LAN address never gets those.
+
+Free-plan limits: one ngrok agent at a time (`tunnel.py` kills leftovers) and
+the link only works while your laptop runs. For an always-on address, deploy the
+backend to any host and point the domain at it — no code changes.
 
 **Packaged APK path (post-hackathon):** the frontend is framework-free, so
 wrapping is mechanical — Capacitor (`npx cap init && npx cap add android`

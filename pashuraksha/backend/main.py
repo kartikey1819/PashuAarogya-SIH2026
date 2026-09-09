@@ -944,8 +944,9 @@ def export_csv(what: str, db: Session = Depends(get_db)):
 
 @app.get("/api/hostinfo")
 def hostinfo():
-    """LAN addresses so a phone on the same Wi-Fi can open the app."""
-    import socket
+    """Addresses a phone can use: the public HTTPS tunnel (any network —
+    started by tunnel.py) and, as a fallback, the LAN address."""
+    import socket, urllib.request as _ur
     urls = []
     try:
         s_ = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -954,7 +955,22 @@ def hostinfo():
         s_.close()
     except Exception:
         pass
-    return {"urls": urls}
+    public = None
+    try:   # live ngrok agent API
+        with _ur.urlopen("http://127.0.0.1:4040/api/tunnels", timeout=1) as r:
+            t = json.loads(r.read().decode()).get("tunnels", [])
+        https = [x["public_url"] for x in t if x.get("public_url", "").startswith("https")]
+        public = (https or [x["public_url"] for x in t] or [None])[0]
+    except Exception:
+        pass
+    if not public:   # cloudflared (or any) tunnel writes its URL here
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "public_url.txt")
+        try:
+            if time.time() - os.path.getmtime(p) < 12 * 3600:
+                public = open(p, encoding="utf-8").read().strip() or None
+        except OSError:
+            pass
+    return {"urls": urls, "public_url": public}
 
 
 # ------------------------------------------ Pashu Lens: AI identification --

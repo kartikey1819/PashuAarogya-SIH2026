@@ -181,11 +181,10 @@ footer.lite{border-top:1px solid var(--hair);margin-top:56px;padding:20px;text-a
     </div>
   </div>
   <div class="login-box" id="phoneBox" style="margin-top:16px;text-align:center;display:none">
-    <h3 style="justify-content:center">📱 Open on your phone · मोबाइलवर उघडा</h3>
+    <h3 style="justify-content:center">📱 Open on your phone · मोबाइल पर खोलें</h3>
     <div id="qr" style="display:flex;justify-content:center;margin:6px 0 10px"></div>
-    <div class="mono" style="font-size:12px;color:var(--muted)" id="lanurl"></div>
-    <div class="muted" style="font-size:11.5px;margin-top:8px">Same Wi-Fi → scan → in Chrome choose
-      <b>“Add to Home screen”</b> — it installs like an Android app and works offline.</div>
+    <div class="mono" style="font-size:12px;color:var(--navy);word-break:break-all" id="lanurl"></div>
+    <div id="pubNote" class="muted" style="font-size:11.5px;margin-top:8px"></div>
   </div>
 </div>
 
@@ -263,9 +262,15 @@ function countTo(id, target) {
 (async () => {
   try {
     const h = await fetch('/api/hostinfo').then(r => r.json());
-    if (!h.urls || !h.urls.length) return;
-    const url = h.urls[0];
-    document.getElementById('lanurl').textContent = url;
+    const url = h.public_url || (h.urls && h.urls[0]);
+    if (!url) return;
+    document.getElementById('lanurl').textContent = (h.public_url ? '🌐 ' : '📶 ') + url;
+    document.getElementById('pubNote').innerHTML = h.public_url
+      ? `<b style="color:var(--green)">Public HTTPS link — works on mobile data, any network.</b>
+         First open shows a one-time ngrok “Visit Site” page — tap it. Then Chrome →
+         <b>“Add to Home screen”</b> to install as an app (voice &amp; camera enabled on HTTPS).`
+      : `Same Wi-Fi only. For a public link run <b>python tunnel.py</b> (or use run.bat) —
+         then this QR switches to an HTTPS address that works anywhere.`;
     document.getElementById('phoneBox').style.display = 'block';
     const s = document.createElement('script');
     s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
