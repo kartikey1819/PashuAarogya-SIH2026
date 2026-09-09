@@ -317,6 +317,12 @@ function showResult(res, offline) {
       ${band !== 'low' ? `<div style="margin-top:4px;font-size:14.5px"><b>⛔ ${t('do_not_move')}</b></div>` : ''}
       <div class="mono" style="margin-top:10px;font-size:12px;opacity:.85">${t('case_id')}: #${res.id}</div>`));
     const advice = adviceFor(res.suspected_names);
+    const hc = homeCareText(state.report.species, state.report.symptoms, res.suspected_names);
+    if (hc) {
+      view.appendChild(el('div', 'card', `<h3>🏠 ${t('home_care')}</h3>
+        <div style="font-size:15px;line-height:1.55">${esc(hc)}</div>
+        <div class="muted" style="font-size:12px;margin-top:8px">${t('then_report')}</div>`));
+    }
     if (res.suspected_names && res.suspected_names.length) {
       view.appendChild(el('div', 'card', `<h3>Triage (not a diagnosis)</h3>
         ${res.suspected_names.map(n => `<span class="chip medium" style="margin:2px">${esc(n)}?</span>`).join('')}
@@ -327,7 +333,8 @@ function showResult(res, offline) {
           ${(res.triage_reasons || []).map(x => '• ' + esc(x)).join('<br>')}</div>`));
     }
     // Pashu Mitra: read the result aloud
-    const spoken = [t('triage_' + band), band !== 'low' ? t('do_not_move') : '', advice].filter(Boolean).join('. ');
+    const spoken = [t('triage_' + band), band !== 'low' ? t('do_not_move') : '',
+                    hc ? t('home_care') + ': ' + hc : advice].filter(Boolean).join('. ');
     const sp = el('button', 'btn outline', `🔊 ${t('listen')}`);
     sp.style.cssText = 'width:100%;margin-top:12px;padding:13px;font-size:16px';
     sp.onclick = () => speak(spoken);
@@ -454,6 +461,34 @@ function renderLens(out, r, dataUrl) {
 }
 
 /* speak() is provided by assistant.js (shared voice engine) */
+
+/* Client-side suspicion from the KB (same weighted-signs logic as the server
+   triage) — lets the assistant give home care before the report is filed. */
+function suspectDiseases(species, symptoms) {
+  const out = [];
+  for (const [k, d] of Object.entries((KB && KB.diseases) || {})) {
+    if (species && d.species && !d.species.includes(species)) continue;
+    const score = (symptoms || []).reduce((s, c) => s + ((d.signs || {})[c] || 0), 0);
+    if (score >= (d.min_score || 6)) out.push([k, d, score]);
+  }
+  return out.sort((a, b) => b[2] - a[2]);
+}
+function homeCareText(species, symptoms, names) {
+  // 1) disease-level home care for the best suspicion (by names or by symptoms)
+  const ds = (KB && KB.diseases) || {};
+  let d = null;
+  for (const n of names || []) {
+    d = Object.values(ds).find(x => x.name && (x.name.en === n || x.name[LANG] === n)) || d;
+    if (d) break;
+  }
+  if (!d) { const s = suspectDiseases(species, symptoms); if (s.length) d = s[0][1]; }
+  const hc = d && d.home_care && (d.home_care[LANG] || d.home_care.en);
+  if (hc) return hc;
+  // 2) symptom-level first aid
+  const fa = (KB && KB.symptom_first_aid) || {};
+  const tips = (symptoms || []).map(c => fa[c] && (fa[c][LANG] || fa[c].en)).filter(Boolean);
+  return tips.length ? tips.join('. ') + '.' : '';
+}
 function adviceFor(names) {
   const ds = (KB && KB.diseases) || {};
   for (const n of names || []) {
@@ -590,6 +625,9 @@ async function services() {
         <div style="margin-top:7px;padding:9px 11px;background:var(--green-soft);
           border-radius:8px"><b>${t('what_to_do')}:</b>
           ${esc((d.action || {})[LANG] || (d.action || {}).en || '')}</div>
+        ${d.home_care ? `<div style="margin-top:6px;padding:9px 11px;background:var(--saffron-soft);
+          border-radius:8px"><b>🏠 ${t('home_care')}:</b>
+          ${esc(d.home_care[LANG] || d.home_care.en || '')}</div>` : ''}
         ${d.zoonotic ? `<div style="margin-top:6px;color:var(--red);font-weight:600;
           font-size:12.5px">☣ ${LANG === 'mr' ? 'हा रोग माणसांनाही होऊ शकतो — काळजी घ्या!' :
           LANG === 'hi' ? 'यह रोग मनुष्यों में भी फैल सकता है!' :
@@ -662,12 +700,23 @@ function initAssistant() {
         const sp = findSpecies(ql);
         const syms = (typeof parseVoice === 'function') ? parseVoice(q) : [];
         const spName = sp ? t(sp) : '';
-        const text = sp
-          ? L(`ठीक है — ${spName} की शिकायत दर्ज करते हैं। ${syms.length ? syms.length + ' लक्षण पहचाने।' : 'अब लक्षण चुनिए।'}`,
-              `ठीक — ${spName}ची तक्रार नोंदवूया. ${syms.length ? syms.length + ' लक्षणे ओळखली.' : 'आता लक्षणे निवडा.'}`,
-              `Okay — filing a report for ${spName}. ${syms.length ? syms.length + ' symptom(s) recognised.' : 'Now pick the symptoms.'}`)
-          : L('कौन सा जानवर बीमार है? नीचे चुनिए।', 'कोणते जनावर आजारी आहे? खाली निवडा.', 'Which animal is sick? Choose below.');
-        return { text, actions: [{ label: L('📢 शिकायत शुरू करें', '📢 तक्रार सुरू करा', '📢 Start report'),
+        // home care first — what to do right now — then the report
+        const hc = syms.length ? homeCareText(sp, syms, []) : '';
+        const sus = syms.length ? suspectDiseases(sp, syms) : [];
+        const susName = sus.length ? ((sus[0][1].name || {})[LANG] || sus[0][1].name.en) : '';
+        let text;
+        if (sp && hc) {
+          text = L(`${spName} के लक्षण ${susName ? '<b>' + esc(susName) + '</b> जैसे लगते हैं। ' : ''}<b>🏠 घर पर अभी:</b> ${esc(hc)}<br><b>${t('then_report')}</b>`,
+                   `${spName}ची लक्षणे ${susName ? '<b>' + esc(susName) + '</b> सारखी वाटतात. ' : ''}<b>🏠 घरी आत्ता:</b> ${esc(hc)}<br><b>${t('then_report')}</b>`,
+                   `${spName}'s signs look ${susName ? 'consistent with <b>' + esc(susName) + '</b>. ' : 'concerning. '}<b>🏠 Home care now:</b> ${esc(hc)}<br><b>${t('then_report')}</b>`);
+        } else if (sp) {
+          text = L(`ठीक है — ${spName} की शिकायत दर्ज करते हैं। अब लक्षण चुनिए, फिर मैं घर पर करने योग्य उपाय बताऊँगा।`,
+                   `ठीक — ${spName}ची तक्रार नोंदवूया. आता लक्षणे निवडा, मग घरगुती उपाय सांगतो.`,
+                   `Okay — filing a report for ${spName}. Pick the symptoms and I'll suggest home care.`);
+        } else {
+          text = L('कौन सा जानवर बीमार है? नीचे चुनिए।', 'कोणते जनावर आजारी आहे? खाली निवडा.', 'Which animal is sick? Choose below.');
+        }
+        return { text, actions: [{ label: L('📢 शिकायत दर्ज करें', '📢 तक्रार नोंदवा', '📢 File report'),
                                     run: () => PR.startReport(sp, syms) }] };
       } },
     { // vaccination camps

@@ -40,6 +40,8 @@ const I18N = {
     ai_low_conf: "खात्री कमी — संकरित असू शकते; पशुवैद्य तपासतील",
     ai_not_running: "AI सेवा सध्या उपलब्ध नाही — हाताने नोंदणी करा", manual_register: "हाताने नोंदणी",
     registered: "जनावराची नोंदणी झाली",
+    home_care: "घरी आत्ता काय करावे", then_report: "आणि लगेच तक्रार नोंदवा — पशुवैद्य येतील",
+    first_aid: "प्रथमोपचार",
   },
   hi: {
     app_name: "पशुरक्षा", tagline: "पशुधन स्वास्थ्य सुरक्षा प्रणाली",
@@ -81,6 +83,8 @@ const I18N = {
     ai_low_conf: "भरोसा कम — संकर हो सकता है; पशु चिकित्सक जांचेंगे",
     ai_not_running: "AI सेवा अभी उपलब्ध नहीं — हाथ से पंजीकरण करें", manual_register: "हाथ से पंजीकरण",
     registered: "पशु पंजीकृत हुआ",
+    home_care: "घर पर अभी क्या करें", then_report: "और साथ ही शिकायत दर्ज करें — पशु चिकित्सक आएंगे",
+    first_aid: "प्राथमिक उपचार",
   },
   en: {
     app_name: "PashuRaksha", tagline: "Livestock Health Protection System",
@@ -122,6 +126,8 @@ const I18N = {
     ai_low_conf: "Low confidence — may be crossbred; a vet can verify",
     ai_not_running: "AI service not running — register manually", manual_register: "Register manually",
     registered: "Animal registered",
+    home_care: "Home care right now", then_report: "and file the report — the vet will come",
+    first_aid: "First aid",
   },
 };
 let LANG = localStorage.getItem('pr_lang') || 'hi';   // Hindi default; Marathi/English on toggle

@@ -1243,6 +1243,16 @@ def _assistant_context(db, user, page: str) -> str:
             pass
     lines.append("Diseases in knowledge base: " + ", ".join(
         f"{k}={d['name']['en']}" for k, d in kb["diseases"].items()))
+    lg = user.lang if user.lang in ("hi", "mr", "en") else "hi"
+    lines.append("HOME CARE GUIDE (safe, non-prescription — quote from here when a sick animal is described):")
+    for k, d in kb["diseases"].items():
+        hc = (d.get("home_care") or {}).get(lg) or (d.get("home_care") or {}).get("en")
+        if hc:
+            lines.append(f"  {d['name']['en']}: {hc}")
+    fa = kb.get("symptom_first_aid") or {}
+    if fa:
+        lines.append("FIRST AID BY SYMPTOM: " + "; ".join(
+            f"{k}: {v.get(lg) or v.get('en')}" for k, v in fa.items()))
     return "\n".join(lines)
 
 
@@ -1276,12 +1286,17 @@ def assistant_chat(body: ChatIn, user: User = Depends(current_user),
         "You are पशु मित्र (Pashu Mitra), the voice assistant inside PashuAarogya, the Government of "
         "Maharashtra's livestock disease early-warning and response platform. "
         f"Reply in {LANG_NAME[lang]}" + (" using Devanagari script" if lang != "en" else "") +
-        ", in simple spoken words a village farmer understands, maximum 60 words — it will be read aloud. "
+        ", in simple spoken words a village farmer understands, maximum 90 words — it will be read aloud. "
         "Be warm and practical. Never give a definitive diagnosis or drug doses: say signs are 'consistent with' "
         "a disease and route serious cases to the veterinarian / toll-free 1962. Use ONLY the CONTEXT for facts "
         "about this user (animals, camps, claims, weather, clusters); never invent numbers, dates or camps. "
-        "If the user describes a sick animal, set action type 'report' with the species and symptom codes you "
-        "recognised so the app can pre-fill the report. If they ask to see something, set a navigation action. "
+        "When a sick animal is described, ALWAYS answer in this order: (1) 2–4 concrete things the farmer can "
+        "do at home RIGHT NOW, taken from the HOME CARE GUIDE / FIRST AID for the matching disease or symptoms "
+        "(isolation, shade, water, jaggery-salt or ORS, wound washing with neem/turmeric, fly or tick control, "
+        "feed changes, milk not to be sold); (2) when to call the vet / 1962; (3) then say the app will file the "
+        "report. Only safe home measures — no antibiotics, injections or doses. "
+        "Set action type 'report' with the species and symptom codes you recognised so the app pre-fills the "
+        "report. If they ask to see something, set a navigation action. "
         "Output STRICT JSON only: {\"reply\": string, \"action\": null | " + actions + "}. "
         f"Symptom codes: {', '.join(SYMPTOM_CODES)}.\n\nCONTEXT:\n" + _assistant_context(db, user, page))
     contents = []
