@@ -1140,6 +1140,217 @@ def sitrep(user: User = Depends(current_user), db: Session = Depends(get_db)):
             "vaccination": vacc, "alerts": alerts_[:10], "forecast": fcst}
 
 
+# ------------------------------------------ पशु मित्र · Gemini-powered brain --
+# Rule-based skills answer first (fast, offline). Anything free-form goes to
+# Gemini with live context from the platform. Keys come from a .env file
+# (repo root / pashuraksha / backend) — never committed.
+def _load_env():
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (os.path.join(here, "..", "..", ".env"), os.path.join(here, "..", ".env"),
+              os.path.join(here, ".env")):
+        try:
+            with open(p, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+        except OSError:
+            pass
+
+
+_load_env()
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_MODELS = ([os.environ["GEMINI_MODEL"]] if os.environ.get("GEMINI_MODEL")
+                 else ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"])
+_GEMINI_OK = {"model": None}
+
+SYMPTOM_CODES = ["fever", "nodules", "lameness", "oral_lesions", "hoof_lesions", "salivation",
+                 "nasal_discharge", "ocular_discharge", "cough", "diarrhoea", "bloat", "swelling",
+                 "sudden_death", "abortion", "low_milk", "anorexia", "itching", "red_urine",
+                 "udder_swelling", "aggression", "twisted_neck", "egg_drop", "ticks"]
+LANG_NAME = {"hi": "Hindi", "mr": "Marathi", "en": "English"}
+
+
+@app.get("/api/assistant/status")
+def assistant_status():
+    return {"llm": bool(GEMINI_KEY), "model": _GEMINI_OK["model"] or GEMINI_MODELS[0],
+            "provider": "Google Gemini" if GEMINI_KEY else None}
+
+
+def _assistant_context(db, user, page: str) -> str:
+    """Live facts the model may use — it must not invent anything else."""
+    kb = intel.load_kb()
+    lines = [f"User: {user.name}, role={user.role}"]
+    if page == "farmer":
+        fm = db.query(Farmer).filter(Farmer.user_id == user.id).first()
+        if fm:
+            v = db.get(Location, fm.village_id)
+            lines.append(f"Village: {v.name if v else '?'}")
+            animals = db.query(Animal).filter(Animal.farmer_id == fm.id).all()
+            by_sp = {}
+            for a in animals:
+                by_sp[a.species] = by_sp.get(a.species, 0) + 1
+            lines.append("Animals: " + ", ".join(f"{n} {sp}" for sp, n in by_sp.items()) or "none")
+            due = sum(1 for a in animals if not db.query(Vaccination)
+                      .filter(Vaccination.animal_id == a.id).first())
+            lines.append(f"Animals without any vaccination record: {due}")
+            blocked = sum(1 for a in animals
+                          if _permit_status(db, a.village_id, a.id)["status"] == "BLOCKED")
+            if blocked:
+                lines.append(f"Movement BLOCKED for {blocked} animal(s): village inside an active "
+                             f"outbreak containment zone")
+            for a in animals:
+                wd = _withdrawal_status(db, a.id)
+                if wd:
+                    lines.append(f"FOOD SAFETY: {a.species} {a.tag_id} is under treatment "
+                                 f"({wd['treatment']}); milk/meat withdrawal — must NOT be sold "
+                                 f"for {wd['days_left']} more day(s), until {wd['until']}")
+            cl = (db.query(Claim).filter(Claim.farmer_id == fm.id)
+                    .order_by(Claim.filed_at.desc()).first())
+            if cl:
+                lines.append(f"Latest compensation claim: #{cl.id} Rs {cl.amount} status {cl.status}")
+            camps = list_camps(True, user, db)[:2]
+            for c in camps:
+                lines.append(f"Vaccination camp: {c['disease_name']} at {c['village']} on {c['date']} (free)")
+            try:
+                w = wx.refresh_village_weather(db, v) if v else None
+                if w and w.get("temp_c") is not None:
+                    lines.append(f"Weather today: {round(w['temp_c'])}C, humidity {round(w['humidity'])}%, "
+                                 f"rain {w.get('rain_mm', 0)} mm")
+            except Exception:
+                pass
+            for a in get_alerts("farmer", user.lang or "hi", user, db)[:2]:
+                lines.append(f"Recent advisory: {a['title']} — {a['body'][:140]}")
+    else:
+        s = dashboard_summary(db)
+        lines.append(f"State summary: {s['active_outbreaks']} active clusters, {s['cases_7d']} reports "
+                     f"and {s['deaths_7d']} deaths in 7 days, {s['high_risk_villages']} high-risk villages, "
+                     f"vaccination coverage {round(s['vaccination_coverage'] * 100)}%, "
+                     f"{s['pending_lab']} samples in lab")
+        for c in dashboard_map("village", db)["clusters"]:
+            lines.append(f"Cluster #{c['id']}: {c['suspected']} near {c['center']}, {c['cases_7d']} obs vs "
+                         f"{c['expected']} expected, p={c['p_value']}{', ZOONOTIC' if c['zoonotic'] else ''}")
+        tasks_ = list_tasks(user, db)
+        lines.append(f"Open response tasks: {sum(1 for t in tasks_ if t['status'] != 'DONE')}")
+        try:
+            f = fc.compare(db, days=7, ring_km=12.0)["summary"]
+            lines.append(f"7-day forecast: {f['baseline_cases']} cases with no action vs "
+                         f"{f['scenario_cases']} with 12 km ring vaccination ({f['prevented']} prevented, "
+                         f"{f['doses_needed']} doses)")
+        except Exception:
+            pass
+    lines.append("Diseases in knowledge base: " + ", ".join(
+        f"{k}={d['name']['en']}" for k, d in kb["diseases"].items()))
+    return "\n".join(lines)
+
+
+class ChatIn(BaseModel):
+    query: str
+    lang: str = "hi"
+    page: str = "farmer"
+    history: list = []       # [{"role": "user"|"assistant", "text": "..."}]
+
+
+def _gemini_call(model: str, payload: dict):
+    req = urllib.request.Request(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_KEY}",
+        data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=40) as r:
+        return json.loads(r.read().decode())
+
+
+@app.post("/api/assistant/chat")
+def assistant_chat(body: ChatIn, user: User = Depends(current_user),
+                   db: Session = Depends(get_db)):
+    if not GEMINI_KEY:
+        raise HTTPException(503, "Gemini is not configured (GEMINI_API_KEY missing in .env)")
+    lang = body.lang if body.lang in LANG_NAME else "hi"
+    page = "gov" if body.page == "gov" else "farmer"
+    actions = ('{"type":"tab","tab":"home|report|animals|services|alerts"} | '
+               '{"type":"report","species":"cattle|buffalo|goat|sheep|poultry|null","symptoms":[codes]}'
+               if page == "farmer" else
+               '{"type":"section","section":"overview|forecast|tasks|claims|campaigns|reports"}')
+    system = (
+        "You are पशु मित्र (Pashu Mitra), the voice assistant inside PashuAarogya, the Government of "
+        "Maharashtra's livestock disease early-warning and response platform. "
+        f"Reply in {LANG_NAME[lang]}" + (" using Devanagari script" if lang != "en" else "") +
+        ", in simple spoken words a village farmer understands, maximum 60 words — it will be read aloud. "
+        "Be warm and practical. Never give a definitive diagnosis or drug doses: say signs are 'consistent with' "
+        "a disease and route serious cases to the veterinarian / toll-free 1962. Use ONLY the CONTEXT for facts "
+        "about this user (animals, camps, claims, weather, clusters); never invent numbers, dates or camps. "
+        "If the user describes a sick animal, set action type 'report' with the species and symptom codes you "
+        "recognised so the app can pre-fill the report. If they ask to see something, set a navigation action. "
+        "Output STRICT JSON only: {\"reply\": string, \"action\": null | " + actions + "}. "
+        f"Symptom codes: {', '.join(SYMPTOM_CODES)}.\n\nCONTEXT:\n" + _assistant_context(db, user, page))
+    contents = []
+    for h in body.history[-8:]:
+        role = "model" if h.get("role") == "assistant" else "user"
+        if h.get("text"):
+            contents.append({"role": role, "parts": [{"text": str(h["text"])[:600]}]})
+    contents.append({"role": "user", "parts": [{"text": body.query[:600]}]})
+    # thinking tokens count against maxOutputTokens on 2.5-series models — a
+    # 60-word spoken reply needs no chain-of-thought, so turn it off
+    payload = {"system_instruction": {"parts": [{"text": system}]}, "contents": contents,
+               "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1500,
+                                    "responseMimeType": "application/json",
+                                    "thinkingConfig": {"thinkingBudget": 0}}}
+    models = ([_GEMINI_OK["model"]] if _GEMINI_OK["model"] else []) + \
+             [m for m in GEMINI_MODELS if m != _GEMINI_OK["model"]]
+    last_err = None
+    for model in models:
+        try:
+            try:
+                res = _gemini_call(model, payload)
+            except urllib.error.HTTPError as e:
+                body_ = e.read().decode()[:300]
+                if e.code == 400 and "thinking" in body_.lower():
+                    # model without a thinking budget: retry once without it
+                    p2 = json.loads(json.dumps(payload))
+                    p2["generationConfig"].pop("thinkingConfig", None)
+                    res = _gemini_call(model, p2)
+                else:
+                    raise urllib.error.HTTPError(e.url, e.code, body_, e.headers, None)
+            _GEMINI_OK["model"] = model
+            break
+        except urllib.error.HTTPError as e:
+            last_err = f"{model}: HTTP {e.code} {e.msg[:200] if isinstance(e.msg, str) else ''}"
+            if e.code in (404, 400, 429):
+                continue
+            raise HTTPException(502, last_err)
+        except Exception as e:
+            last_err = f"{model}: {e}"
+            continue
+    else:
+        raise HTTPException(502, f"Gemini unavailable — {last_err}")
+    text = ""
+    try:
+        text = res["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception:
+        pass
+    text = text.strip()
+    if text.startswith("`"):
+        text = text.strip("`").replace("json\n", "", 1)
+    try:
+        out = json.loads(text)
+        reply, action = str(out.get("reply", "")).strip(), out.get("action")
+    except Exception:
+        import re as _re
+        # truncated / malformed JSON: salvage the reply string, drop the action
+        m = _re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)', text)
+        reply = json.loads('"' + m.group(1) + '"') if m else (text or "…")
+        if len(reply) > 700:
+            reply = reply[:700].rsplit(" ", 1)[0] + "…"
+        action = None
+    if isinstance(action, dict) and action.get("type") == "report":
+        action["symptoms"] = [s for s in (action.get("symptoms") or []) if s in SYMPTOM_CODES]
+        if action.get("species") not in ("cattle", "buffalo", "goat", "sheep", "poultry"):
+            action["species"] = None
+    audit(db, user.id, "assistant_llm", f"{_GEMINI_OK['model']} q={body.query[:60]}"); db.commit()
+    return {"reply": reply, "action": action, "model": _GEMINI_OK["model"], "provider": "Google Gemini"}
+
+
 # --------------------------------------------------------------------- demo --
 @app.post("/api/demo/advance")
 def demo_advance(user: User = Depends(current_user), db: Session = Depends(get_db)):

@@ -98,6 +98,7 @@
   /* ------------------------------------------------------------------ core -- */
   const A = {
     skills: [], page: 'farmer', examples: [], offsetBottom: 24, rec: null, greeted: false,
+    llm: null, hist: [], onAction: null,
 
     init(opts = {}) {
       Object.assign(this, opts);
@@ -130,6 +131,14 @@
       ex.innerHTML = this.examples.map(x => `<button>${x}</button>`).join('');
       ex.querySelectorAll('button').forEach(b => b.onclick = () => this.handle(b.textContent));
       if (location.hash === '#mitra') setTimeout(() => this.open(false), 700);   // deep-link
+      // LLM brain available? (Gemini via backend; key never reaches the browser)
+      fetch('/api/assistant/status').then(r => r.json()).then(s => {
+        this.llm = s.llm ? s : null;
+        if (s.llm) {
+          const sub = bg.querySelector('.pm-hd .s');
+          sub.innerHTML = t('sub') + ' · <span style="color:#7C3AED;font-weight:600">✨ Gemini</span>';
+        }
+      }).catch(() => {});
     },
 
     open(autoListen = false) {
@@ -170,15 +179,47 @@
 
     async handle(q) {
       this.say(q, 'u');
+      this.hist.push({ role: 'user', text: q });
       const ql = q.toLowerCase();
+      // 1) precise rule-based skills: instant, offline, they act directly
       for (const s of this.skills) {
         if (s.match(ql)) {
-          try { const r = await s.run(q, ql); if (r) { await this.reply(r.text, r.actions || [], r.spoken); } }
+          try { const r = await s.run(q, ql); if (r) { this.hist.push({ role: 'assistant', text: r.text.replace(/<[^>]+>/g, '') });
+            await this.reply(r.text, r.actions || [], r.spoken); } }
           catch (e) { this.reply('⚠ ' + (e.message || 'error')); }
           return;
         }
       }
+      // 2) Gemini: free-form questions with live context from the platform
+      if (this.llm) { await this.askLLM(q); return; }
       this.reply(`${t('fallback')}<br>${this.examples.map(x => '• ' + x).join('<br>')}`, [], t('fallback'));
+    },
+
+    async askLLM(q) {
+      const log = document.getElementById('pmLog');
+      const think = document.createElement('div'); think.className = 'pm-m a';
+      think.innerHTML = '<span style="opacity:.6">✨ …</span>'; log.appendChild(think); log.scrollTop = log.scrollHeight;
+      try {
+        const r = await API.post('/api/assistant/chat', {
+          query: q, lang: lang(), page: this.page, history: this.hist.slice(-8, -1) });
+        think.remove();
+        this.hist.push({ role: 'assistant', text: r.reply });
+        if (this.hist.length > 16) this.hist = this.hist.slice(-16);
+        const act = r.action, btns = [];
+        if (act && this.onAction) {
+          const label = act.type === 'report' ? { hi: '📢 रिपोर्ट भरें', mr: '📢 तक्रार भरा', en: '📢 File report' }[lang()]
+                      : { hi: '↗ खोलें', mr: '↗ उघडा', en: '↗ Open' }[lang()];
+          btns.push({ label, run: () => this.onAction(act) });
+        }
+        const tag = `<div style="font-size:10px;color:#7C3AED;margin-top:6px">✨ Gemini · ${esc(r.model || '')}</div>`;
+        await this.reply(esc(r.reply) + tag, btns, r.reply);
+        // a recognised sick-animal description pre-fills the report automatically
+        if (act && act.type === 'report' && this.onAction) { setTimeout(() => { this.onAction(act); this.close(); }, 600); }
+      } catch (e) {
+        think.remove();
+        this.reply(`${t('fallback')}<br>${this.examples.map(x => '• ' + x).join('<br>')}`, [], t('fallback'));
+        console.warn('assistant LLM error', e);
+      }
     },
   };
 

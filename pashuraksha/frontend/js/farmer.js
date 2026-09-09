@@ -749,6 +749,11 @@ function initAssistant() {
 
   PashuMitra.init({
     page: 'farmer', offsetBottom: 92, skills,
+    onAction: act => {
+      if (!act) return;
+      if (act.type === 'report') PR.startReport(act.species || null, act.symptoms || []);
+      else if (act.type === 'tab' && act.tab) PR.goTab(act.tab);
+    },
     examples: [L('मेरी गाय बीमार है, बुखार और गांठें हैं', 'माझी गाय आजारी आहे, ताप आणि गाठी', 'My cow is sick, fever and nodules'),
                L('टीकाकरण शिविर कब है?', 'लसीकरण शिबिर कधी?', 'When is the vaccination camp?'),
                L('मेरे मुआवजे का क्या हुआ?', 'माझ्या भरपाईचे काय झाले?', 'What happened to my claim?'),

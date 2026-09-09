@@ -25,7 +25,19 @@ answers with voice, and acts:
   *"लम्पी रोग क्या है?"* · *"आज का मौसम"* · *"मदद / 1962"*
 - Officials: *"आज की स्थिति?"* (reads the live summary) · *"पूर्वानुमान दिखाओ"* ·
   *"दावे खोलो"* · *"SITREP"* · *"रडार फिर से चलाओ"* · *"अगला दिन सिमुलेट करो"*
-Rule-based intent routing — no cloud LLM, so navigation and help work offline.
+**Two-layer brain.** Precise rule-based skills answer first (instant, offline,
+they act directly). Anything free-form goes to **Google Gemini** with live context
+from the platform — the farmer's animals, claims, camps, weather, alerts; the
+official's clusters, tasks and forecast — so answers are grounded, not generic.
+Gemini returns a reply plus an optional action (pre-fill a report with the
+species and symptoms it recognised, or open a section), which the app executes.
+Guard-rails in the system prompt: no definitive diagnosis, no drug doses, always
+route serious cases to the vet / 1962, never invent numbers or camps.
+
+Setup: put `GEMINI_API_KEY=...` in a `.env` at the repo root (see
+`.env.example`; the file is git-ignored). Without a key the assistant still
+works on its rule-based skills. The key stays on the server — the browser only
+ever calls `/api/assistant/chat`.
 Language default is **Hindi everywhere** (`pr_lang`), with मराठी / English one tap away.
 
 ### Pashu Lens AI sidecar

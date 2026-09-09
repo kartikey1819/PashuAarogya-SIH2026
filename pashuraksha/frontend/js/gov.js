@@ -61,6 +61,7 @@ function initGovAssistant() {
       run: () => { go('overview'); return { text: 'राज्य निरीक्षण नक्शा खोला।' }; } },
   ];
   PashuMitra.init({ page: 'gov', offsetBottom: 24, skills,
+    onAction: act => { if (act && act.type === 'section' && act.section) go(act.section); },
     hint: 'बोलिए — जैसे "आज की स्थिति क्या है", "पूर्वानुमान दिखाओ", "SITREP"',
     examples: ['आज की स्थिति क्या है?', 'पूर्वानुमान दिखाओ', 'मुआवजा दावे खोलो', 'SITREP रिपोर्ट', 'रडार फिर से चलाओ'] });
 }
