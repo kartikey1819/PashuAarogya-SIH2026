@@ -75,7 +75,11 @@ def run_ngrok(exe, domain):
     args = [exe, "http", str(PORT), "--log", "stdout", "--log-format", "json"]
     if domain:
         args += ["--domain", domain]
-    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    # log to a file, never a pipe: ngrok logs every request and a full pipe
+    # buffer would stall the agent
+    logp = os.path.join(ROOT, "backend", "ngrok.log")
+    logf = open(logp, "w", encoding="utf-8")
+    p = subprocess.Popen(args, stdout=logf, stderr=subprocess.STDOUT, text=True)
     url = None
     for _ in range(40):
         time.sleep(0.75)
@@ -83,7 +87,10 @@ def run_ngrok(exe, domain):
         if url:
             break
         if p.poll() is not None:
-            out = p.stdout.read() if p.stdout else ""
+            try:
+                out = open(logp, encoding="utf-8").read()
+            except OSError:
+                out = ""
             print("ngrok exited:\n" + out[-1500:])
             return None
     if not url:

@@ -956,21 +956,30 @@ def hostinfo():
     except Exception:
         pass
     public = None
-    try:   # live ngrok agent API
-        with _ur.urlopen("http://127.0.0.1:4040/api/tunnels", timeout=1) as r:
-            t = json.loads(r.read().decode()).get("tunnels", [])
-        https = [x["public_url"] for x in t if x.get("public_url", "").startswith("https")]
-        public = (https or [x["public_url"] for x in t] or [None])[0]
-    except Exception:
-        pass
-    if not public:   # cloudflared (or any) tunnel writes its URL here
+    now_ = time.time()
+    if _PUB["url"] and now_ - _PUB["ts"] < 120:          # cached (ngrok's API is slow)
+        public = _PUB["url"]
+    if not public:   # tunnel.py writes the URL here — instant
         p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "public_url.txt")
         try:
-            if time.time() - os.path.getmtime(p) < 12 * 3600:
+            if now_ - os.path.getmtime(p) < 12 * 3600:
                 public = open(p, encoding="utf-8").read().strip() or None
         except OSError:
             pass
+    if not public:   # live ngrok agent API (can take several seconds on Windows)
+        try:
+            with _ur.urlopen("http://127.0.0.1:4040/api/tunnels", timeout=6) as r:
+                t = json.loads(r.read().decode()).get("tunnels", [])
+            https = [x["public_url"] for x in t if x.get("public_url", "").startswith("https")]
+            public = (https or [x["public_url"] for x in t] or [None])[0]
+        except Exception:
+            pass
+    if public:
+        _PUB.update(url=public, ts=now_)
     return {"urls": urls, "public_url": public}
+
+
+_PUB = {"url": None, "ts": 0.0}
 
 
 # ------------------------------------------ Pashu Lens: AI identification --
