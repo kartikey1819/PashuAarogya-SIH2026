@@ -10,3 +10,4 @@ node_modules/
 # runtime artefacts
 *.db
 *.log
+public_url.txt
