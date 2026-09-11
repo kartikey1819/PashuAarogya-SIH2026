@@ -1,5 +1,12 @@
 # Deploying PashuAarogya
 
+> **The plan in one line:** ngrok stays the primary demo link (it has the AI model
+> and your laptop's speed). Render is the **backup** — the same app, minus Pashu
+> Lens, on a URL that is live even if your laptop isn't. Set it up once now; it
+> costs nothing and it's there if the venue Wi-Fi or your machine lets you down.
+>
+> Jump to [the backup recipe](#the-backup-recipe-render-without-the-ai-model).
+
 ## Read this first: don't split the frontend onto Vercel
 
 It's a natural instinct, but in this project it costs you work and buys nothing.
@@ -88,19 +95,51 @@ https://your-app.onrender.com/healthz
 Give it 1–3 minutes on Postgres. Until `ready` is true, dashboards will look empty.
 
 ### 6. Pashu Lens (the breed model) — the honest constraint
+<a id="the-backup-recipe-render-without-the-ai-model"></a>
 **It will not run on Render's free tier.** TensorFlow plus the 235 MB
 EfficientNetV2 model needs well over the 512 MB RAM free instances get; it will
-OOM on load. Your choices:
+OOM on load.
 
-- **Leave it off.** The app degrades honestly — Pashu Lens shows *"AI service not
-  running — register manually"* and everything else works. Nothing crashes.
-- **Deploy it separately, free:** [HuggingFace Spaces](https://huggingface.co/spaces)
-  (Docker SDK, 16 GB RAM on the free CPU tier) fits it comfortably. Push
-  `breed-ai-service/` there, then set `PASHU_AI_URL` to the Space URL.
-- **Pay:** a Render Standard instance (2 GB RAM) runs it in-house.
+**For a backup instance, just turn it off** — `render.yaml` already sets:
 
-For a live demo, the HuggingFace route is the one worth doing — it keeps the
-strongest feature working and costs nothing.
+```
+PASHU_AI_DISABLED = 1
+```
+
+This is a first-class state, not a broken one. Verified behaviour with it set:
+
+| | Without the model |
+|---|---|
+| Pashu Lens card | Camera/gallery buttons dim, **✍️ Register manually** appears in their place |
+| Manual registration | Species → breed (Maharashtra breeds, or type your own) → sex → age → saved with a real Tag ID |
+| `/api/ai/status` | Answers in **2 ms**, cached — no connect-timeout stall on page load |
+| Message shown | *"Breed identification is not enabled on this deployment. You can still register the animal by hand."* |
+| Everything else | Outbreak Radar, History, Forecast, passports, claims, camps, पशु मित्र — all unaffected |
+
+So the backup demonstrates 5 of the 6 innovations; only Pashu Lens is absent, and
+it says so in plain words rather than erroring.
+
+**Want the model live too?** [HuggingFace Spaces](https://huggingface.co/spaces)
+(Docker SDK, 16 GB RAM free CPU tier) fits it comfortably: push
+`breed-ai-service/` there, then on Render set `PASHU_AI_DISABLED=0` and
+`PASHU_AI_URL=https://<your-space>.hf.space`. A Render Standard instance (2 GB)
+also works, for money.
+
+### The backup recipe — Render without the AI model
+
+The short version, assuming the repo is on GitHub:
+
+1. Render → **New → Blueprint** → this repo. `render.yaml` creates the web
+   service *and* a free Postgres, already wired, with `PASHU_AI_DISABLED=1`.
+2. Paste `GEMINI_API_KEY` into the service's Environment tab (optional — without
+   it पशु मित्र falls back to its rule-based skills).
+3. Wait for `/healthz` to report `"ready": true` — 1–3 minutes while it seeds.
+4. Point UptimeRobot at `/healthz` every 10 minutes so it never sleeps.
+5. Keep the URL in your pocket. Demo from ngrok; switch if anything goes wrong.
+
+Keep in mind the two instances have **separate databases** — a report filed on
+ngrok will not appear on Render. That is fine for a backup; just don't present
+from both at once.
 
 ### 7. Keep it awake
 Free Render services sleep after 15 minutes idle and take ~50 s to wake — fatal

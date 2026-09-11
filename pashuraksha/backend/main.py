@@ -1052,20 +1052,39 @@ def _pretty_breed(label: str):
     return label.replace("_", " ").replace(" cow", "").replace(" Cow", "").strip().title()
 
 
-def _ai_get(path, timeout=3):
+def _ai_get(path, timeout=2):
     with urllib.request.urlopen(AI_URL + path, timeout=timeout) as r:
         return json.loads(r.read().decode())
 
 
+# Probing a sidecar that isn't there costs a connect timeout on every page load,
+# so the answer is cached: briefly when up, longer when it is simply not deployed
+# (the usual case on a cloud backup instance without the 235 MB model).
+_AI_CACHE = {"at": 0.0, "val": None}
+AI_DISABLED = os.environ.get("PASHU_AI_DISABLED", "").lower() in ("1", "true", "yes")
+_AI_ABSENT_MSG = ("Breed identification is not enabled on this deployment. "
+                  "You can still register the animal by hand.")
+
+
 @app.get("/api/ai/status")
 def ai_status():
-    try:
-        h = _ai_get("/health")
-        return {"available": True, "model_loaded": h.get("model_loaded"),
-                "model_version": h.get("model_version"), "labels": h.get("labels"),
-                "gate": (h.get("subject_gate") or {}).get("loaded")}
-    except Exception as e:
-        return {"available": False, "model_loaded": False, "error": str(e)[:120]}
+    now = time.time()
+    ttl = 20 if (_AI_CACHE["val"] or {}).get("available") else 120
+    if _AI_CACHE["val"] is not None and now - _AI_CACHE["at"] < ttl:
+        return _AI_CACHE["val"]
+    if AI_DISABLED:
+        out = {"available": False, "model_loaded": False, "disabled": True,
+               "error": _AI_ABSENT_MSG}
+    else:
+        try:
+            h = _ai_get("/health", timeout=2)
+            out = {"available": True, "model_loaded": h.get("model_loaded"),
+                   "model_version": h.get("model_version"), "labels": h.get("labels"),
+                   "gate": (h.get("subject_gate") or {}).get("loaded")}
+        except Exception:
+            out = {"available": False, "model_loaded": False, "error": _AI_ABSENT_MSG}
+    _AI_CACHE.update(at=now, val=out)
+    return out
 
 
 class IdentifyIn(BaseModel):
@@ -1075,16 +1094,16 @@ class IdentifyIn(BaseModel):
 @app.post("/api/ai/identify")
 def ai_identify(body: IdentifyIn, user: User = Depends(current_user),
                 db: Session = Depends(get_db)):
+    if AI_DISABLED:
+        return {"success": False, "available": False, "error": _AI_ABSENT_MSG}
     try:
         req = urllib.request.Request(
             AI_URL + "/predict", data=json.dumps({"image": body.image}).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=60) as r:
             res = json.loads(r.read().decode())
-    except Exception as e:
-        return {"success": False, "available": False,
-                "error": "AI identification service is not running on this server.",
-                "detail": str(e)[:160]}
+    except Exception:
+        return {"success": False, "available": False, "error": _AI_ABSENT_MSG}
     res["available"] = True
     if res.get("success"):
         sp = {"cow": "cattle", "buffalo": "buffalo"}.get(res.get("species"), "cattle")

@@ -432,6 +432,16 @@ async function animals() {
     b.textContent = ok ? `AI ✓ ${s.labels || 50} ${t('breeds')}` : t('ai_offline');
     b.className = 'chip ' + (ok ? 'low' : 'medium');
     b.style.cssText = 'margin-left:auto;font-size:9px';
+    if (ok) return;
+    // model not deployed here — offer the manual path straight away rather
+    // than making the farmer shoot a photo to discover it is unavailable
+    const cam = lens.querySelector('#lensBtnCam');
+    if (cam) cam.style.cssText =
+      'border-style:dashed;border-color:var(--hair);background:var(--surface);color:var(--muted)';
+    const man = el('button', 'btn', `✍️ ${t('manual_register')}`);
+    man.style.cssText = 'width:100%;margin-top:9px;padding:12px';
+    man.onclick = () => { man.remove(); manualRegister(lens.querySelector('#lensOut')); };
+    lens.insertBefore(man, lens.querySelector('#lensOut'));
   }).catch(() => {});
   const lensCam = lens.querySelector('#lensCam'), lensGal = lens.querySelector('#lensGal');
   lens.querySelector('#lensBtnCam').onclick = () => lensCam.click();
@@ -570,16 +580,25 @@ document.getElementById('modalBg').addEventListener('click', e => {
 function renderLens(out, r, dataUrl) {
   const img = `<img src="${dataUrl}" style="width:100%;border-radius:12px;margin-top:12px">`;
   if (!r.available) {
+    // No breed model on this deployment — never a dead end: register by hand.
     out.innerHTML = img + `<div class="card" style="margin-top:10px;background:var(--amber-soft)">
       <b>⚠ ${t('ai_not_running')}</b>
-      <div class="muted" style="font-size:12px;margin-top:4px">${esc(r.detail || '')}</div></div>`;
+      <div class="muted" style="font-size:12px;margin-top:4px">${esc(r.detail || '')}</div>
+      <div id="manualBox"></div></div>`;
+    manualRegister(out.querySelector('#manualBox'));
     return;
   }
   if (!r.success) {
     out.innerHTML = img + `<div class="card" style="margin-top:10px;background:var(--amber-soft)">
       <b>${r.not_animal ? '🚫' : '📷'} ${esc(r.error || '')}</b>
       ${r.quality ? `<div class="muted" style="font-size:12px;margin-top:4px">Photo quality ${r.quality.score}/100</div>` : ''}
-      <button class="btn sm outline" style="margin-top:8px" onclick="document.getElementById('lensFile').click()">↻ ${t('retake')}</button></div>`;
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <button class="btn sm outline" id="lensRetake">↻ ${t('retake')}</button>
+        <button class="btn sm" id="lensManual">✍️ ${t('manual_register')}</button></div>
+      <div id="manualBox"></div></div>`;
+    out.querySelector('#lensRetake').onclick = () => document.getElementById('lensCam').click();
+    out.querySelector('#lensManual').onclick = () =>
+      manualRegister(out.querySelector('#manualBox'));
     return;
   }
   const conf = Math.round((r.best_confidence || 0) * 100);
@@ -606,6 +625,65 @@ function renderLens(out, r, dataUrl) {
   out.querySelector('#lensReg').onclick = async () => {
     try {
       const a = await API.post('/api/animals', { species: r.species_app, breed: r.best_label, sex: 'F', age_months: 36 });
+      toast(`✅ ${t('registered')} · 🏷 ${a.tag_id}`, 'ok');
+      render();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+}
+
+/* Manual animal registration — the path when Pashu Lens is unavailable
+   (no breed model on this deployment, offline, or an unusable photo).
+   Breeds common to Maharashtra; "other" lets the farmer type any name. */
+const BREEDS_BY_SPECIES = {
+  cattle: ['Gir', 'Khillar', 'Deoni', 'Red Kandhari', 'Dangi', 'Sahiwal',
+           'HF cross', 'Jersey cross', 'Tharparkar', 'Kankrej'],
+  buffalo: ['Murrah', 'Pandharpuri', 'Nagpuri', 'Jaffarabadi', 'Mehsana', 'Surti'],
+  goat: ['Osmanabadi', 'Sangamneri', 'Berari', 'Boer cross', 'Sirohi'],
+  sheep: ['Deccani', 'Madgyal', 'Lonand'],
+  poultry: ['Desi', 'Giriraja', 'Kadaknath', 'Vanaraja'],
+  pig: ['Large White Yorkshire', 'Ghungroo', 'Desi'],
+};
+
+function manualRegister(box) {
+  if (!box) return;
+  const L = (hi, mr, en) => (LANG === 'mr' ? mr : LANG === 'en' ? en : hi);
+  const spOpts = SPECIES.map(s => `<option value="${s.k}">${s.em} ${t(s.k)}</option>`).join('');
+  box.innerHTML = `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--hair)">
+    <label class="muted" style="font-size:12.5px">${L('पशु का प्रकार', 'जनावराचा प्रकार', 'Species')}</label>
+    <select id="mrSp" style="margin:5px 0 9px">${spOpts}</select>
+    <label class="muted" style="font-size:12.5px">${L('नस्ल', 'जात', 'Breed')}</label>
+    <select id="mrBr" style="margin:5px 0 9px"></select>
+    <input id="mrBrOther" placeholder="${L('नस्ल का नाम लिखें', 'जातीचे नाव लिहा', 'Type the breed name')}"
+      style="margin:0 0 9px;display:none">
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><label class="muted" style="font-size:12.5px">${L('लिंग', 'लिंग', 'Sex')}</label>
+        <select id="mrSex" style="margin-top:5px">
+          <option value="F">${L('मादा ♀', 'मादी ♀', 'Female ♀')}</option>
+          <option value="M">${L('नर ♂', 'नर ♂', 'Male ♂')}</option></select></div>
+      <div style="flex:1"><label class="muted" style="font-size:12.5px">${L('उम्र (साल)', 'वय (वर्षे)', 'Age (years)')}</label>
+        <input id="mrAge" type="number" min="0" max="25" step="0.5" value="3" style="margin-top:5px"></div>
+    </div>
+    <button class="btn green" id="mrSave" style="width:100%;margin-top:11px;padding:12px">
+      ✅ ${t('register_animal')}</button></div>`;
+  const sp = box.querySelector('#mrSp'), br = box.querySelector('#mrBr');
+  const other = box.querySelector('#mrBrOther');
+  const fillBreeds = () => {
+    const list = BREEDS_BY_SPECIES[sp.value] || [];
+    br.innerHTML = list.map(b => `<option>${esc(b)}</option>`).join('') +
+      `<option value="__other">${L('अन्य…', 'इतर…', 'Other…')}</option>`;
+    other.style.display = 'none';
+  };
+  fillBreeds();
+  sp.onchange = fillBreeds;
+  br.onchange = () => { other.style.display = br.value === '__other' ? 'block' : 'none'; };
+  box.querySelector('#mrSave').onclick = async () => {
+    const breed = br.value === '__other' ? (other.value.trim() || '—') : br.value;
+    try {
+      const a = await API.post('/api/animals', {
+        species: sp.value, breed,
+        sex: box.querySelector('#mrSex').value,
+        age_months: Math.round(parseFloat(box.querySelector('#mrAge').value || '3') * 12),
+      });
       toast(`✅ ${t('registered')} · 🏷 ${a.tag_id}`, 'ok');
       render();
     } catch (e) { toast(e.message, 'err'); }

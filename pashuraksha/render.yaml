@@ -29,7 +29,13 @@ services:
         generateValue: true
       - key: GEMINI_API_KEY           # Pashu Mitra's brain — paste in the dashboard
         sync: false
-      - key: PASHU_AI_URL             # optional Pashu Lens sidecar (see DEPLOY.md)
+      # Pashu Lens (235 MB TensorFlow model) cannot fit a 512 MB free instance.
+      # Declaring it off makes the app say so cleanly and offer manual animal
+      # registration, instead of probing a sidecar that isn't there.
+      # Running the model elsewhere? Set this to 0 and point PASHU_AI_URL at it.
+      - key: PASHU_AI_DISABLED
+        value: "1"
+      - key: PASHU_AI_URL             # only used when PASHU_AI_DISABLED=0
         sync: false
 
 databases:
