@@ -5,8 +5,10 @@ document.getElementById('who').textContent = `${API.user.name}`;
 
 let map, layerGroup, trendChart, channelChart;
 let fmap, fLayer, fData = null, fDay = 7, fTimer = null, fChart = null;   // forecast state
+let hChart = null;                                                       // history state
+let hFilters = { months: 12, level: 'block', district: '', disease: '', species: '' };
 const _h = (location.hash || '').slice(1);
-let section = ['overview', 'forecast', 'tasks', 'claims', 'campaigns', 'reports'].includes(_h) ? _h : 'overview';
+let section = ['overview', 'history', 'forecast', 'tasks', 'claims', 'campaigns', 'reports'].includes(_h) ? _h : 'overview';
 let locCache = null;
 
 setInterval(() => {
@@ -17,6 +19,7 @@ setInterval(() => {
 
 const SECTIONS = [
   ['overview', '🗺️ Overview', 'निरीक्षण'],
+  ['history', '📜 History', 'इतिहास'],
   ['forecast', '🔮 Forecast', 'अंदाज'],
   ['tasks', '📋 Action Queue', 'कार्य'],
   ['claims', '💰 Claims', 'नुकसान भरपाई'],
@@ -25,7 +28,17 @@ const SECTIONS = [
 ];
 
 init();
-async function init() { renderNav(); render(); initGovAssistant(); }
+async function init() {
+  renderNav(); render(); initGovAssistant();
+  // live sync — any officer's action anywhere refreshes this dashboard
+  Sync.start(d => {
+    if (section === 'overview' && (d.cases || d.outbreaks || d.alerts || d.samples_result)) refreshOverview();
+    else if (section === 'tasks' && (d.tasks_open || d.tasks_done)) tasks();
+    else if (section === 'claims' && d.claims !== undefined) claims();
+    else if (section === 'campaigns' && (d.camps || d.vaccinations)) campaigns();
+    else if (section === 'history' && d.cases) history();
+  }, 6000);
+}
 
 /* पशु मित्र for officials: voice navigation + situational questions (Hindi default) */
 function initGovAssistant() {
@@ -79,7 +92,7 @@ function renderNav(counts = {}) {
 
 function render() {
   if (fTimer) { clearInterval(fTimer); fTimer = null; }
-  ({ overview, forecast, tasks, claims, campaigns, reports })[section]();
+  ({ overview, history, forecast, tasks, claims, campaigns, reports })[section]();
   animView(document.getElementById('view'));
 }
 
@@ -501,6 +514,175 @@ function renderCamps(camps) {
     : '<div class="muted">No camps scheduled</div>';
 }
 
+/* =============================== HISTORY ================================== */
+/* "which areas, which disease, which animals, which breeds" — the historical
+   disease trend the PS asks us to integrate, and the evidence base for planning. */
+async function history() {
+  const view = document.getElementById('view');
+  view.innerHTML = `
+    <div class="section-head">
+      <h2>Historical Disease Records <span class="mr">· ऐतिहासिक रोग नोंदी</span></h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap" id="hBar"></div></div>
+    <div class="panel-note">Every case ever reported, aggregated by <b>area · disease · species · breed · month</b>.
+      This is the evidence base for vaccination planning and the seasonal prior the Outbreak Radar scores against.
+      Filter it, then export from <b>Reports</b>.</div>
+    <div class="kpis" id="hKpis"></div>
+    <div class="card" style="margin-top:16px"><h3>Cases &amp; deaths by month</h3>
+      <canvas id="hChart" height="90"></canvas></div>
+    <div class="grid g2" style="margin-top:16px">
+      <div class="card"><h3>Which areas were affected</h3>
+        <div style="overflow-x:auto"><table id="hArea"></table></div></div>
+      <div class="card"><h3>Which diseases</h3>
+        <div style="overflow-x:auto"><table id="hDis"></table></div></div>
+    </div>
+    <div class="grid g2" style="margin-top:16px">
+      <div class="card"><h3>Which animals (species)</h3>
+        <div style="overflow-x:auto"><table id="hSp"></table></div></div>
+      <div class="card"><h3>Which breeds were affected</h3>
+        <div style="overflow-x:auto"><table id="hBr"></table></div></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h3>Record-level history <span class="muted" style="font-weight:400;text-transform:none;
+        font-family:var(--f-b);font-size:12px">— every case row behind the numbers above</span></h3>
+      <div style="overflow-x:auto;max-height:460px"><table id="hDet"></table></div></div>`;
+  await loadHistory();
+}
+
+async function loadHistory() {
+  try { await loadHistoryInner(); }
+  catch (e) {
+    const k = document.getElementById('hKpis');
+    if (k) k.innerHTML = `<div class="card" style="grid-column:1/-1;background:var(--red-soft);
+      border-color:#EFC1B9"><b>Could not load history</b>
+      <div class="mono" style="font-size:11.5px;margin-top:4px">${esc(e.message || e)}</div></div>`;
+    console.error('history', e);
+  }
+}
+
+async function loadHistoryInner() {
+  const f = hFilters;
+  const qs = `months=${f.months}&level=${f.level}` +
+    (f.district ? `&district=${encodeURIComponent(f.district)}` : '') +
+    (f.disease ? `&disease=${encodeURIComponent(f.disease)}` : '') +
+    (f.species ? `&species=${encodeURIComponent(f.species)}` : '');
+  const h = await API.get('/api/history?' + qs);
+
+  // filter bar (built once we know the options)
+  const bar = document.getElementById('hBar');
+  if (bar && !bar.dataset.built) {
+    const sel = (id, label, opts, val) =>
+      `<select id="${id}" style="width:auto;padding:8px 12px" title="${label}">${opts.map(o =>
+        `<option value="${esc(o.v)}"${String(o.v) === String(val) ? ' selected' : ''}>${esc(o.t)}</option>`).join('')}</select>`;
+    bar.innerHTML =
+      sel('hMonths', 'Period', [{ v: 3, t: 'Last 3 months' }, { v: 6, t: 'Last 6 months' },
+                                { v: 12, t: 'Last 12 months' }, { v: 24, t: 'Last 24 months' },
+                                { v: 36, t: 'Last 3 years' }], String(f.months)) +
+      sel('hLevel', 'Aggregate by', [{ v: 'village', t: 'By village' }, { v: 'block', t: 'By block' },
+                                     { v: 'district', t: 'By district' }], f.level) +
+      sel('hDist', 'District', [{ v: '', t: 'All districts' }]
+            .concat(h.options.districts.map(d => ({ v: d, t: d }))), f.district) +
+      sel('hDisease', 'Disease', [{ v: '', t: 'All diseases' }]
+            .concat(h.options.diseases.map(d => ({ v: d.key, t: d.name }))), f.disease) +
+      sel('hSpecies', 'Species', [{ v: '', t: 'All species' }]
+            .concat(h.options.species.map(s => ({ v: s, t: s[0].toUpperCase() + s.slice(1) }))), f.species);
+    bar.dataset.built = '1';
+    const rerun = () => {
+      hFilters = { months: +bar.querySelector('#hMonths').value,
+                   level: bar.querySelector('#hLevel').value,
+                   district: bar.querySelector('#hDist').value,
+                   disease: bar.querySelector('#hDisease').value,
+                   species: bar.querySelector('#hSpecies').value };
+      loadHistory();
+    };
+    bar.querySelectorAll('select').forEach(s => s.onchange = rerun);
+  }
+
+  const T = h.totals;
+  document.getElementById('hKpis').innerHTML = `
+    <div class="kpi"><div class="v">${T.cases.toLocaleString('en-IN')}</div><div class="l">Case records</div></div>
+    <div class="kpi warn"><div class="v">${T.animals.toLocaleString('en-IN')}</div><div class="l">Animals affected</div></div>
+    <div class="kpi crit"><div class="v">${T.deaths.toLocaleString('en-IN')}</div><div class="l">Deaths recorded</div></div>
+    <div class="kpi ok"><div class="v">${T.confirmed}</div><div class="l">Lab-confirmed</div></div>
+    <div class="kpi"><div class="v">${T.areas}</div><div class="l">Areas affected (${h.level})</div></div>
+    <div class="kpi"><div class="v">${T.diseases}</div><div class="l">Distinct diseases</div></div>
+    <div class="kpi"><div class="v">${T.breeds}</div><div class="l">Breeds affected</div></div>`;
+
+  // monthly trend
+  if (hChart) hChart.destroy();
+  hChart = new Chart(document.getElementById('hChart'), {
+    data: { labels: h.by_month.map(m => m.month),
+      datasets: [
+        { type: 'bar', label: 'Cases', data: h.by_month.map(m => m.cases),
+          backgroundColor: '#1B4C8C', borderRadius: 3, order: 2 },
+        { type: 'line', label: 'Deaths', data: h.by_month.map(m => m.deaths),
+          borderColor: '#C0392B', backgroundColor: 'rgba(192,57,43,.14)', fill: true,
+          tension: .3, pointRadius: 2, order: 1 }] },
+    options: { plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+      scales: { x: { grid: { display: false } }, y: { beginAtZero: true, ticks: { precision: 0 } } } },
+  });
+
+  const bre = b => b && b.length
+    ? b.map(x => `<span class="chip info" style="font-size:9px;margin:1px">${esc(x.breed)} ${x.cases}</span>`).join('')
+    : '<span class="muted">—</span>';
+
+  document.getElementById('hArea').innerHTML =
+    `<thead><tr><th>${h.level[0].toUpperCase() + h.level.slice(1)}</th><th>District</th>
+      <th class="nm">Cases</th><th class="nm">Animals</th><th class="nm">Deaths</th>
+      <th>Main disease</th><th>Breeds hit</th></tr></thead><tbody>` +
+    (h.by_area.length ? h.by_area.map(a => `<tr>
+      <td><b>${esc(a.area)}</b></td><td class="muted">${esc(a.district || '')}</td>
+      <td class="mono">${a.cases}</td><td class="mono">${a.animals}</td>
+      <td class="mono" style="${a.deaths ? 'color:var(--red);font-weight:700' : ''}">${a.deaths}</td>
+      <td>${esc(a.top_disease)}</td><td>${bre(a.top_breeds)}</td></tr>`).join('')
+      : '<tr><td colspan="7" class="muted">No records in this period</td></tr>') + '</tbody>';
+
+  document.getElementById('hDis').innerHTML =
+    `<thead><tr><th>Disease</th><th class="nm">Cases</th><th class="nm">Deaths</th>
+      <th>Worst area</th><th>Species</th><th>Breeds hit</th></tr></thead><tbody>` +
+    (h.by_disease.length ? h.by_disease.map(d => `<tr>
+      <td><b>${esc(d.disease)}</b>${d.zoonotic ? ' <span class="chip zoo" style="font-size:8.5px">☣</span>' : ''}</td>
+      <td class="mono">${d.cases}</td>
+      <td class="mono" style="${d.deaths ? 'color:var(--red);font-weight:700' : ''}">${d.deaths}</td>
+      <td>${esc(d.top_area)}</td>
+      <td class="muted" style="font-size:12px">${d.species_list.map(s => esc(s.species)).join(', ')}</td>
+      <td>${bre(d.top_breeds)}</td></tr>`).join('')
+      : '<tr><td colspan="6" class="muted">—</td></tr>') + '</tbody>';
+
+  document.getElementById('hSp').innerHTML =
+    `<thead><tr><th>Species</th><th class="nm">Cases</th><th class="nm">Animals</th>
+      <th class="nm">Deaths</th><th>Breeds affected</th></tr></thead><tbody>` +
+    (h.by_species.length ? h.by_species.map(s => `<tr>
+      <td><b>${esc(s.species)}</b></td><td class="mono">${s.cases}</td>
+      <td class="mono">${s.animals}</td>
+      <td class="mono" style="${s.deaths ? 'color:var(--red);font-weight:700' : ''}">${s.deaths}</td>
+      <td>${bre(s.top_breeds)}</td></tr>`).join('')
+      : '<tr><td colspan="5" class="muted">—</td></tr>') + '</tbody>';
+
+  document.getElementById('hBr').innerHTML =
+    `<thead><tr><th>Breed</th><th>Species</th><th class="nm">Cases</th>
+      <th class="nm">Deaths</th><th>Most common disease</th></tr></thead><tbody>` +
+    (h.by_breed.length ? h.by_breed.map(b => `<tr>
+      <td><b>${esc(b.breed)}</b></td><td class="muted">${esc(b.species)}</td>
+      <td class="mono">${b.cases}</td>
+      <td class="mono" style="${b.deaths ? 'color:var(--red);font-weight:700' : ''}">${b.deaths}</td>
+      <td>${esc(b.top_disease)}</td></tr>`).join('')
+      : '<tr><td colspan="5" class="muted">No breed data in this period</td></tr>') + '</tbody>';
+
+  document.getElementById('hDet').innerHTML =
+    `<thead><tr><th>#</th><th>Date</th><th>Village</th><th>District</th><th>Disease</th>
+      <th>Species</th><th>Breed</th><th class="nm">Affected</th><th class="nm">Deaths</th>
+      <th>Status</th></tr></thead><tbody>` +
+    (h.detail.length ? h.detail.map(r => `<tr>
+      <td class="mono">${r.id}</td><td class="mono" style="font-size:11.5px">${esc(r.date)}</td>
+      <td>${esc(r.village || '')}</td><td class="muted">${esc(r.district || '')}</td>
+      <td><b>${esc(r.disease)}</b>${r.zoonotic ? ' ☣' : ''}</td>
+      <td>${esc(r.species)}</td><td class="muted">${esc(r.breed || '—')}</td>
+      <td class="mono">${r.affected}</td>
+      <td class="mono" style="${r.deaths ? 'color:var(--red);font-weight:700' : ''}">${r.deaths}</td>
+      <td><span class="chip ${r.triage || 'info'}" style="font-size:9px">${esc(r.status)}</span></td></tr>`).join('')
+      : '<tr><td colspan="10" class="muted">—</td></tr>') + '</tbody>';
+}
+
 /* =============================== FORECAST ================================= */
 async function forecast() {
   const view = document.getElementById('view');
@@ -656,5 +838,39 @@ async function reports() {
           ${audit.map(r => `<div style="padding:3px 0;border-bottom:1px solid var(--surface-2)">
             ${fmtDT(r.at)} · ${esc(r.user)} · <b>${esc(r.action)}</b> ${esc(r.detail)}</div>`).join('')}
         </div></div>
-    </div>`;
+    </div>
+    <div class="card" style="margin-top:16px"><h3>🗄️ Database status — proof of persistence</h3>
+      <div id="dbHealth" class="muted">Checking…</div></div>`;
+  renderDbHealth();
+}
+
+/* Every action on every dashboard is written to the database — this panel
+   shows the live row counts and the most recent writes, so "is it actually
+   saving?" is answerable on stage. */
+async function renderDbHealth() {
+  const box = document.getElementById('dbHealth');
+  if (!box) return;
+  try {
+    const h = await API.get('/api/db/health');
+    const LABEL = { locations: 'Locations', users: 'Users', farmers: 'Farmers',
+      animals: 'Animals', cases: 'Case reports', vaccinations: 'Vaccinations',
+      treatments: 'Treatments', samples: 'Lab samples', outbreaks: 'Outbreaks',
+      alerts: 'Alerts', claims: 'Claims', tasks: 'Tasks', camps: 'Camps',
+      risk_scores: 'Risk scores', weather_obs: 'Weather', audit_log: 'Audit log' };
+    box.innerHTML = `
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <span class="chip ${h.persistent ? 'low' : 'high'}">${h.persistent ? '✓ PERSISTENT' : '⚠ IN-MEMORY'}</span>
+        <span class="mono" style="font-size:11.5px">${esc(h.engine)}${h.path ? ' · ' + esc(h.path) : ''}</span>
+        ${h.size_kb ? `<span class="chip info">${h.size_kb.toLocaleString('en-IN')} KB on disk</span>` : ''}
+        <span class="chip info">${h.total_rows.toLocaleString('en-IN')} rows total</span></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:8px">
+        ${Object.entries(h.tables).map(([k, v]) => `
+          <div style="border:1px solid var(--hair);border-radius:9px;padding:8px 11px">
+            <div style="font-family:var(--f-d);font-size:19px;font-weight:700">${v.toLocaleString('en-IN')}</div>
+            <div class="muted" style="font-size:11px">${LABEL[k] || k}</div></div>`).join('')}</div>
+      <div style="margin-top:12px"><b style="font-size:12.5px">Most recent writes</b>
+        <div class="mono" style="font-size:11px;margin-top:5px">
+          ${h.recent_writes.map(r => `<div style="padding:2px 0">${fmtDT(r.at)} · <b>${esc(r.action)}</b> ${esc(r.detail || '')}</div>`).join('')}
+        </div></div>`;
+  } catch (e) { box.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; }
 }

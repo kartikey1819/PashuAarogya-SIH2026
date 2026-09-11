@@ -66,6 +66,7 @@ class Case(Base):
     farmer_id = Column(Integer, ForeignKey("farmers.id"))
     animal_id = Column(Integer, ForeignKey("animals.id"))
     species = Column(String, nullable=False)
+    breed = Column(String)                      # breed affected (historical trends)
     symptoms = Column(String, nullable=False)   # comma-joined syndrome codes
     affected_count = Column(Integer, default=1)
     dead_count = Column(Integer, default=0)

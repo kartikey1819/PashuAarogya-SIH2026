@@ -177,6 +177,7 @@ def seed_all(db):
 
     # ------------------------------------------------------- storylines ------
     now = datetime.utcnow()
+    _historical_backfill(db, by_block, months=24)
     _background_noise(db, villages, days=28)
 
     # 1. LSD wave in Ahmednagar — 10 days, biggest story
@@ -340,8 +341,18 @@ NOISE = [
 def _mk_case(db, village, species, symptoms, dead, when, channel=None):
     t = triage(species, symptoms, dead_count=dead, month=when.month)
     fm = db.query(Farmer).filter(Farmer.village_id == village.id).first()
+    # attach a real breed from this village's stock so historical trends can
+    # answer "which breeds were affected"
+    breed = None
+    herd = (db.query(Animal)
+              .filter(Animal.village_id == village.id, Animal.species == species)
+              .all())
+    if herd:
+        breed = rng.choice(herd).breed
+    elif species in BREEDS:
+        breed = rng.choice(BREEDS[species])
     c = Case(village_id=village.id, farmer_id=fm.id if fm else None,
-             species=species, symptoms=",".join(symptoms),
+             species=species, breed=breed, symptoms=",".join(symptoms),
              affected_count=rng.randint(1, 4), dead_count=dead,
              onset_date=when.date(), reported_at=when,
              channel=channel or rng.choice(["app", "app", "field", "ivr", "sms"]),
@@ -352,6 +363,45 @@ def _mk_case(db, village, species, symptoms, dead, when, channel=None):
              status="TRIAGED")
     db.add(c)
     return c
+
+
+def _historical_backfill(db, by_block, months=24):
+    """Two years of seasonal disease history so 'historical disease trends' is
+    real data, not a stub: monsoon LSD, winter FMD, summer anthrax, PPR in the
+    kidding season — each in the blocks where that disease actually recurs."""
+    now = datetime.utcnow()
+    # (disease signs, species, peak months, blocks, cases per peak month, death rate)
+    WAVES = [
+        (["nodules", "fever", "low_milk"], ["cattle", "buffalo"], [7, 8, 9],
+         ["Shevgaon", "Pathardi", "Nevasa", "Rahuri", "Malegaon"], 9, 0.10),
+        (["oral_lesions", "hoof_lesions", "salivation", "fever"], ["cattle", "buffalo"],
+         [12, 1, 2], ["Chalisgaon", "Erandol", "Bhusawal", "Shirur"], 8, 0.04),
+        (["swelling", "fever", "sudden_death"], ["cattle", "buffalo"], [6, 7, 8],
+         ["Sinnar", "Niphad", "Junnar"], 4, 0.30),
+        (["diarrhoea", "fever", "oral_lesions", "nasal_discharge"], ["goat", "sheep"],
+         [3, 4, 5], ["Barshi", "Pandharpur", "Baramati"], 6, 0.12),
+        (["lameness", "swelling", "fever"], ["cattle"], [6, 7],
+         ["Sangamner", "Rahuri", "Niphad"], 3, 0.22),
+        (["sudden_death", "bloat"], ["cattle", "goat"], [4, 5],
+         ["Sinnar", "Barshi"], 2, 0.55),
+    ]
+    for m in range(months, 0, -1):
+        when = now - timedelta(days=m * 30)
+        for signs, species, peak, blocks, base, death_p in WAVES:
+            season = 1.0 if when.month in peak else 0.12
+            for bname in blocks:
+                pool = by_block.get(bname) or []
+                if not pool:
+                    continue
+                n = int(rng.gauss(base * season, max(1, base * season * 0.4)))
+                for _ in range(max(0, n)):
+                    v = rng.choice(pool)
+                    syms = rng.sample(signs, k=min(len(signs), rng.randint(2, 3)))
+                    dead = 1 if rng.random() < death_p else 0
+                    _mk_case(db, v, rng.choice(species), syms, dead,
+                             when + timedelta(days=rng.randint(0, 27),
+                                              hours=rng.randint(0, 23)))
+    db.flush()
 
 
 def _background_noise(db, villages, days=28):

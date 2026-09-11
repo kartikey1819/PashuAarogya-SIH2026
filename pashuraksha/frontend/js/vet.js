@@ -16,6 +16,13 @@ init();
 async function init() {
   try { KB = await API.get('/api/kb'); } catch (e) {}
   renderTabs(); render();
+  // live sync — a farmer's new report or a lab result lands here instantly
+  Sync.start(d => {
+    if (tab === 'queue' && (d.cases || d.samples_result || d.treatments)) queue();
+    else if (tab === 'lab' && (d.samples || d.samples_result)) lab();
+    else if (tab === 'tasks' && (d.tasks_open || d.tasks_done)) tasks();
+    else if (tab === 'alerts' && d.alerts) alerts();
+  }, 6000);
 }
 function renderTabs() {
   const tabs = document.getElementById('tabs');

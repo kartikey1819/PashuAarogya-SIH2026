@@ -1,6 +1,13 @@
 /* Trilingual dictionary — Marathi default for farmer surfaces (FR-19) */
 const I18N = {
   mr: {
+    photo_optional: "📷 फोटो (ऐच्छिक)", upload_photo: "गॅलरीतून निवडा", remove: "काढा",
+    health_record: "आरोग्य नोंद", treatments: "उपचार", add_vaccination: "लसीकरण नोंदवा",
+    due_now: "लस बाकी", village_history: "गावाचा रोग इतिहास", past_diseases: "पूर्वीचे रोग",
+    affected_breeds: "बाधित जाती", last_seen: "शेवटचे", view_record: "नोंद पहा",
+    no_records: "अद्याप नोंद नाही", save: "जतन करा", cancel: "रद्द",
+    peak_season: "जास्त धोका महिने", saved_db: "डेटाबेसमध्ये जतन झाले",
+    vacc_added: "लसीकरण नोंदवले", total_cases: "एकूण नोंदी",
     app_name: "पशुरक्षा", tagline: "पशुधन आरोग्य सुरक्षा प्रणाली",
     report_sick: "आजारी जनावराची तक्रार करा", my_animals: "माझी जनावरे",
     advisories: "सूचना व सल्ला", vaccination: "लसीकरण",
@@ -44,6 +51,13 @@ const I18N = {
     first_aid: "प्रथमोपचार",
   },
   hi: {
+    photo_optional: "📷 फोटो (वैकल्पिक)", upload_photo: "गैलरी से चुनें", remove: "हटाएं",
+    health_record: "स्वास्थ्य रिकॉर्ड", treatments: "उपचार", add_vaccination: "टीकाकरण दर्ज करें",
+    due_now: "टीका बाकी", village_history: "गाँव का रोग इतिहास", past_diseases: "पिछले रोग",
+    affected_breeds: "प्रभावित नस्लें", last_seen: "अंतिम", view_record: "रिकॉर्ड देखें",
+    no_records: "अभी कोई रिकॉर्ड नहीं", save: "सहेजें", cancel: "रद्द",
+    peak_season: "अधिक जोखिम महीने", saved_db: "डेटाबेस में सहेजा गया",
+    vacc_added: "टीकाकरण दर्ज हुआ", total_cases: "कुल रिकॉर्ड",
     app_name: "पशुरक्षा", tagline: "पशुधन स्वास्थ्य सुरक्षा प्रणाली",
     report_sick: "बीमार पशु की सूचना दें", my_animals: "मेरे पशु",
     advisories: "सूचनाएं व सलाह", vaccination: "टीकाकरण",
@@ -87,6 +101,13 @@ const I18N = {
     first_aid: "प्राथमिक उपचार",
   },
   en: {
+    photo_optional: "📷 Photo (optional)", upload_photo: "Upload from gallery", remove: "Remove",
+    health_record: "Health record", treatments: "Treatments", add_vaccination: "Record vaccination",
+    due_now: "Vaccination due", village_history: "Village disease history", past_diseases: "Past diseases",
+    affected_breeds: "Breeds affected", last_seen: "Last", view_record: "View record",
+    no_records: "No records yet", save: "Save", cancel: "Cancel",
+    peak_season: "Peak-risk months", saved_db: "Saved to database",
+    vacc_added: "Vaccination recorded", total_cases: "Total records",
     app_name: "PashuRaksha", tagline: "Livestock Health Protection System",
     report_sick: "Report a sick animal", my_animals: "My animals",
     advisories: "Advisories & alerts", vaccination: "Vaccination",

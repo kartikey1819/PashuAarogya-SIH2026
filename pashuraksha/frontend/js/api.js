@@ -115,3 +115,93 @@ window.animView = (v) => {
   void v.offsetWidth;          // reflow to restart animation
   v.classList.add('vin');
 };
+
+/* ============================================================
+   LIVE CROSS-DASHBOARD SYNC
+   Every dashboard polls /api/sync/state. When any counter moves —
+   a farmer files a report, a vet collects a sample, a lab publishes a
+   result, an officer approves a claim — every other open dashboard
+   refreshes itself. This is what makes alerts feel instant.
+   ============================================================ */
+const Sync = {
+  version: null, timer: null, cbs: [], counts: {}, last: null, paused: false,
+
+  start(cb, ms = 6000) {
+    if (cb) this.cbs.push(cb);
+    if (this.timer) return;
+    const tick = async () => {
+      if (this.paused || document.hidden) return;
+      try {
+        const s = await API.get('/api/sync/state');
+        const first = this.version === null;
+        const changed = !first && s.version !== this.version;
+        const prev = this.counts;
+        this.version = s.version; this.counts = s.counts; this.last = s.last_action;
+        this.paint(true);
+        if (changed) {
+          const d = {};
+          for (const k in s.counts) {
+            const delta = (s.counts[k] || 0) - (prev[k] || 0);
+            if (delta) d[k] = delta;
+          }
+          this.cbs.forEach(f => { try { f(d, s); } catch (e) {} });
+          this.announce(d);
+        }
+      } catch (e) { this.paint(false); }
+    };
+    tick();
+    this.timer = setInterval(tick, ms);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+  },
+
+  /* human-readable "what just changed elsewhere" toast */
+  announce(d) {
+    const L = (localStorage.getItem('pr_lang') || 'hi');
+    const M = {
+      cases:        { hi: 'नई रिपोर्ट', mr: 'नवीन तक्रार', en: 'new report' },
+      alerts:       { hi: 'नया अलर्ट', mr: 'नवीन सूचना', en: 'new alert' },
+      outbreaks:    { hi: 'नया प्रकोप क्लस्टर', mr: 'नवीन उद्रेक', en: 'new outbreak cluster' },
+      samples:      { hi: 'नया नमूना', mr: 'नवीन नमुना', en: 'new sample' },
+      samples_result:{hi: 'लैब परिणाम आया', mr: 'प्रयोगशाळा निकाल', en: 'lab result published' },
+      claims:       { hi: 'नया मुआवजा दावा', mr: 'नवीन भरपाई दावा', en: 'new compensation claim' },
+      tasks_done:   { hi: 'कार्य पूरा हुआ', mr: 'कार्य पूर्ण', en: 'task completed' },
+      camps:        { hi: 'नया टीकाकरण शिविर', mr: 'नवीन शिबिर', en: 'new vaccination camp' },
+      vaccinations: { hi: 'टीकाकरण दर्ज', mr: 'लसीकरण नोंद', en: 'vaccination recorded' },
+      treatments:   { hi: 'उपचार दर्ज', mr: 'उपचार नोंद', en: 'treatment recorded' },
+      animals:      { hi: 'नया पशु पंजीकृत', mr: 'नवीन जनावर', en: 'animal registered' },
+    };
+    const parts = [];
+    for (const k in d) {
+      if (d[k] > 0 && M[k]) parts.push(`${d[k]} ${M[k][L] || M[k].en}`);
+    }
+    if (parts.length && typeof toast === 'function') {
+      toast('🔄 ' + parts.slice(0, 2).join(' · '), 'ok');
+    }
+  },
+
+  paint(online) {
+    const p = document.getElementById('syncPill');
+    if (!p) return;
+    const L = (localStorage.getItem('pr_lang') || 'hi');
+    const lbl = online ? { hi: 'लाइव · डेटाबेस जुड़ा', mr: 'लाइव · डेटाबेस जोडलेले', en: 'Live · database synced' }
+                       : { hi: 'ऑफ़लाइन', mr: 'ऑफलाइन', en: 'Offline' };
+    p.className = 'syncpill' + (online ? '' : ' busy');
+    p.innerHTML = `<span class="dot"></span><span class="lbl">${lbl[L] || lbl.en}</span>`;
+    p.title = online && this.last
+      ? `Last write: ${this.last.action} ${this.last.detail || ''} — ${this.last.by || ''}`
+      : '';
+  },
+};
+window.Sync = Sync;
+
+/* Sticky headers: measure the real header height so the nav band / tab strip
+   docks exactly under it instead of guessing a pixel value. */
+function syncStickyOffsets() {
+  const set = (v, el) => document.documentElement.style
+    .setProperty(v, (el ? Math.round(el.getBoundingClientRect().height) : 0) + 'px');
+  set('--govtop-h', document.querySelector('.gov-top'));
+  set('--govbar-h', document.querySelector('.govbar'));
+}
+window.addEventListener('load', syncStickyOffsets);
+window.addEventListener('resize', syncStickyOffsets);
+document.addEventListener('DOMContentLoaded', syncStickyOffsets);

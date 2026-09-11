@@ -28,6 +28,13 @@ async function init() {
   renderNav(); render();
   document.addEventListener('pr-synced', () => { if (state.tab === 'home') render(); });
   initAssistant();
+  // live sync: a vet's treatment, a lab result or an officer's approval made
+  // elsewhere shows up here without the farmer refreshing
+  Sync.start(d => {
+    const mine = ['alerts', 'treatments', 'samples_result', 'claims', 'camps',
+                  'vaccinations', 'outbreaks'].some(k => d[k]);
+    if (mine && ['home', 'animals', 'services', 'alerts'].includes(state.tab)) render();
+  }, 8000);
 }
 
 function renderNav() {
@@ -103,6 +110,34 @@ async function home() {
   view.appendChild(el('div', 'card', `<div style="font-size:13.5px">
      ☎️ <b>${t('ivr_hint')}</b>
      <div class="muted" style="margin-top:4px"><a href="/ivr.html">IVR डेमो →</a></div></div>`));
+
+  // village disease history — what has hit this village before, and which breeds
+  API.get('/api/history/village').then(h => {
+    if (!h.diseases || !h.diseases.length) return;
+    const MON = { hi: ['जन','फर','मार्च','अप्रै','मई','जून','जुल','अग','सित','अक्तू','नव','दिस'],
+                  mr: ['जान','फेब्रु','मार्च','एप्रि','मे','जून','जुलै','ऑग','सप्टें','ऑक्टो','नोव्हें','डिसें'],
+                  en: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'] }[LANG] ||
+                 ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const c = el('div', 'card');
+    c.style.marginTop = '12px';
+    c.innerHTML = `<h3>📜 ${t('village_history')} — ${esc(h.village || '')}</h3>
+      <div class="muted" style="font-size:12px;margin:-6px 0 10px">${t('total_cases')}: <b>${h.total_cases}</b>
+        ${h.peak_months && h.peak_months.length ? ` · ${t('peak_season')}: <b>${h.peak_months.map(m => MON[m - 1]).join(', ')}</b>` : ''}</div>
+      ${h.diseases.map(d => `
+        <div style="display:flex;gap:9px;align-items:flex-start;padding:8px 0;
+          border-bottom:1px solid var(--surface-2)">
+          <span style="font-size:19px">${d.zoonotic ? '☣' : '🦠'}</span>
+          <div style="flex:1">
+            <b style="font-size:14.5px">${esc(d.name)}</b>
+            <div class="muted" style="font-size:11.5px">
+              ${d.cases} ${LANG === 'en' ? 'cases' : 'नोंदी'}${d.deaths ? ` · ☠ ${d.deaths}` : ''} ·
+              ${t('last_seen')}: ${esc(d.last || '')}
+              ${d.top_breeds && d.top_breeds.length ? `<br>${t('affected_breeds')}: <b>${d.top_breeds.map(esc).join(', ')}</b>` : ''}
+            </div></div>
+          <span class="chip ${d.deaths ? 'high' : 'medium'}" style="font-size:9px">${d.cases}</span>
+        </div>`).join('')}`;
+    view.appendChild(c);
+  }).catch(() => {});
 
   // recent reports
   try {
@@ -252,9 +287,36 @@ function stepConfirm() {
     <div style="margin-top:8px">${r.symptoms.map(s =>
       `<span class="chip info" style="margin:2px">${(syms[s] || {}).icon || ''} ${esc((syms[s] || {})[LANG] || s)}</span>`).join('')}</div>
     <div style="margin-top:12px">
-      <label class="muted" style="font-size:12.5px">📷 Photo (optional)</label>
-      <input type="file" accept="image/*" capture="environment" id="photo" style="margin-top:4px">
+      <label class="muted" style="font-size:12.5px">${t('photo_optional')}</label>
+      <input type="file" accept="image/*" capture="environment" id="photoCam" hidden>
+      <input type="file" accept="image/*" id="photoGal" hidden>
+      <div class="photorow">
+        <button type="button" class="photobtn" id="btnCam"><span class="em">📷</span>${t('take_photo')}</button>
+        <button type="button" class="photobtn" id="btnGal"><span class="em">🖼️</span>${t('upload_photo')}</button>
+      </div>
+      <div id="photoPrev"></div>
     </div>`));
+
+  // camera or gallery — both end up as the same compressed data-URL
+  const prev = document.getElementById('photoPrev');
+  const paintPhoto = () => {
+    if (!state.report.photo) { prev.innerHTML = ''; return; }
+    prev.innerHTML = `<div class="photoprev"><img src="${state.report.photo}">
+      <button type="button" title="${t('remove')}">✕</button></div>`;
+    prev.querySelector('button').onclick = () => { state.report.photo = null; paintPhoto(); };
+  };
+  const pick = async (inp) => {
+    const f = inp.files[0]; if (!f) return;
+    prev.innerHTML = `<div class="muted" style="padding:8px">⏳ …</div>`;
+    state.report.photo = await shrinkPhoto(f, 800);
+    paintPhoto();
+  };
+  const cam = document.getElementById('photoCam'), gal = document.getElementById('photoGal');
+  document.getElementById('btnCam').onclick = () => cam.click();
+  document.getElementById('btnGal').onclick = () => gal.click();
+  cam.onchange = () => pick(cam);
+  gal.onchange = () => pick(gal);
+  paintPhoto();
 
   const sms = `PR ${r.species.toUpperCase().slice(0,3)} S:${r.symptoms.map(s=>s.slice(0,3).toUpperCase()).join(',')} N:${r.affected_count} D:${r.dead_count}`;
   view.appendChild(el('div', '', `<div class="muted" style="font-size:12px;margin:10px 0 4px">
@@ -269,10 +331,6 @@ function stepConfirm() {
 
 async function submitReport() {
   const r = { ...state.report, channel: API.user.role === 'field' ? 'field' : 'app' };
-  const photoInput = document.getElementById('photo');
-  if (photoInput && photoInput.files[0]) {
-    r.photo = await shrinkPhoto(photoInput.files[0]);
-  }
   r.client_uuid = 'cx-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
 
   if (!navigator.onLine) {
@@ -358,8 +416,14 @@ async function animals() {
   lens.innerHTML = `<h3 style="display:flex">📸 ${t('lens_title')}
       <span id="aiBadge" class="chip info" style="margin-left:auto;font-size:9px">…</span></h3>
     <div class="muted" style="font-size:12.5px;margin:-4px 0 10px">${t('lens_hint')}</div>
-    <input type="file" accept="image/*" capture="environment" id="lensFile" hidden>
-    <button class="btn saffron" id="lensBtn" style="width:100%;padding:14px;font-size:16px">📷 ${t('take_photo')}</button>
+    <input type="file" accept="image/*" capture="environment" id="lensCam" hidden>
+    <input type="file" accept="image/*" id="lensGal" hidden>
+    <div class="photorow">
+      <button type="button" class="photobtn" id="lensBtnCam"
+        style="border-style:solid;border-color:var(--saffron);background:var(--saffron);color:#fff">
+        <span class="em">📷</span>${t('take_photo')}</button>
+      <button type="button" class="photobtn" id="lensBtnGal"><span class="em">🖼️</span>${t('upload_photo')}</button>
+    </div>
     <div id="lensOut"></div>`;
   view.appendChild(lens);
   API.get('/api/ai/status').then(s => {
@@ -369,10 +433,11 @@ async function animals() {
     b.className = 'chip ' + (ok ? 'low' : 'medium');
     b.style.cssText = 'margin-left:auto;font-size:9px';
   }).catch(() => {});
-  const fileIn = lens.querySelector('#lensFile');
-  lens.querySelector('#lensBtn').onclick = () => fileIn.click();
-  fileIn.onchange = async () => {
-    const f = fileIn.files[0]; if (!f) return;
+  const lensCam = lens.querySelector('#lensCam'), lensGal = lens.querySelector('#lensGal');
+  lens.querySelector('#lensBtnCam').onclick = () => lensCam.click();
+  lens.querySelector('#lensBtnGal').onclick = () => lensGal.click();
+  const runLens = async (inp) => {
+    const f = inp.files[0]; if (!f) return;
     const out = lens.querySelector('#lensOut');
     const dataUrl = await shrinkPhoto(f, 800);
     out.innerHTML = `<img src="${dataUrl}" style="width:100%;border-radius:12px;margin-top:12px">
@@ -380,6 +445,8 @@ async function animals() {
     try { renderLens(out, await API.post('/api/ai/identify', { image: dataUrl }), dataUrl); }
     catch (e) { out.innerHTML += `<div style="color:var(--red)">${esc(e.message)}</div>`; }
   };
+  lensCam.onchange = () => runLens(lensCam);
+  lensGal.onchange = () => runLens(lensGal);
 
   let list = [];
   try { list = await API.get('/api/animals'); } catch (e) {}
@@ -407,13 +474,98 @@ async function animals() {
         <span class="chip ${pmCls}">${pm.status === 'ALLOWED' ? '✅' : pm.status === 'BLOCKED' ? '⛔' : '⏸'}
           ${t('permit_' + (pm.status || 'ALLOWED'))}</span>
         ${a.withdrawal ? `<span class="chip high">🥛 ${t('milk_withdrawal')} · ${a.withdrawal.days_left} ${LANG === 'en' ? 'days' : 'दिवस'}</span>` : ''}
-        <a class="btn sm outline" style="margin-left:auto;padding:5px 11px" target="_blank"
+        <button class="btn sm" data-rec style="margin-left:auto;padding:5px 11px">📋 ${t('health_record')}</button>
+        <a class="btn sm outline" style="padding:5px 11px" target="_blank"
            href="/passport.html?tag=${encodeURIComponent(a.tag_id)}">🪪 ${t('passport')}</a>
       </div>`);
     card.style.marginBottom = '10px';
+    card.querySelector('[data-rec]').onclick = () => healthRecord(a.id);
     view.appendChild(card);
   });
 }
+
+/* ------------------- animal-level health / vaccination record --------------- */
+async function healthRecord(animalId) {
+  const m = document.getElementById('modal');
+  m.innerHTML = `<div class="muted" style="padding:20px">⏳ …</div>`;
+  openModal();
+  let h;
+  try { h = await API.get(`/api/animals/${animalId}/health`); }
+  catch (e) { m.innerHTML = `<div style="color:var(--red);padding:10px">${esc(e.message)}</div>`; return; }
+  const em = SPECIES.find(s => s.k === h.species)?.em || '🐄';
+  const IC = { vaccination: '💉', case: '📋', treatment: '💊', sample: '🧪' };
+  m.innerHTML = `
+    <h2 style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:30px">${em}</span>
+      <span>${t(h.species)} ${h.breed ? '· ' + esc(h.breed) : ''}
+        <div class="mono" style="font-size:11.5px;color:var(--muted);font-weight:400">🏷 ${esc(h.tag_id)} · 📍 ${esc(h.village || '')}</div></span>
+      <button class="btn sm outline" style="margin-left:auto" id="mClose">✕</button></h2>
+
+    ${h.withdrawal ? `<div class="card" style="background:var(--saffron-soft);border-color:#F2CBA8;margin-bottom:10px">
+      <b>🥛 ${t('milk_withdrawal')} — ${h.withdrawal.days_left} ${LANG === 'en' ? 'days' : 'दिन'}</b>
+      <div class="muted" style="font-size:12.5px">${esc(h.withdrawal.treatment || '')} · ${LANG === 'en' ? 'until' : 'तक'} ${esc(h.withdrawal.until)}</div></div>` : ''}
+
+    ${h.due.length ? `<div class="card" style="background:var(--red-soft);border-color:#EFC1B9;margin-bottom:10px">
+      <b>⚠ ${t('due_now')}</b>
+      <div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap">${h.due.map(d =>
+        `<span class="chip high">${esc(d.name)}</span>`).join('')}</div></div>` : ''}
+
+    <div class="card" style="margin-bottom:10px">
+      <h3>💉 ${t('vaccination')}</h3>
+      ${h.vaccinations.length ? h.vaccinations.map(v => `
+        <div style="display:flex;justify-content:space-between;gap:8px;padding:7px 0;
+          border-bottom:1px solid var(--surface-2);font-size:13.5px">
+          <span><b>${esc(v.name)}</b><br><span class="muted" style="font-size:11.5px">${esc(v.vaccine || '')} ${v.campaign ? '· ' + esc(v.campaign) : ''}</span></span>
+          <span class="mono" style="font-size:11px;text-align:right;white-space:nowrap">${esc(v.given_on)}<br>
+            <span class="muted">→ ${esc(v.due_on)}</span></span></div>`).join('')
+        : `<div class="muted" style="font-size:13px">${t('no_records')}</div>`}
+      <button class="btn green sm" id="addVacc" style="width:100%;margin-top:10px">➕ ${t('add_vaccination')}</button>
+      <div id="vaccForm"></div>
+    </div>
+
+    <div class="card">
+      <h3>🕘 ${t('health_record')}</h3>
+      ${h.timeline.length ? `<div class="tl">${h.timeline.map(x => `
+        <div class="tl-item"><span class="at">${esc(x.at)}</span>
+          <b>${IC[x.kind] || '•'} ${esc(x.title)}</b>
+          ${x.detail ? `<div class="muted" style="font-size:12.5px">${esc(x.detail)}</div>` : ''}
+          ${x.extra ? `<span class="chip info" style="font-size:9px;margin-top:3px">${esc(x.extra)}</span>` : ''}
+          ${x.vet ? `<span class="muted" style="font-size:11px"> · ${esc(x.vet)}</span>` : ''}
+        </div>`).join('')}</div>`
+        : `<div class="muted" style="font-size:13px">${t('no_records')}</div>`}
+    </div>`;
+  m.querySelector('#mClose').onclick = closeModal;
+  m.querySelector('#addVacc').onclick = () => {
+    const box = m.querySelector('#vaccForm');
+    const ds = Object.entries((KB && KB.diseases) || {})
+      .filter(([, d]) => (d.species || []).includes(h.species));
+    box.innerHTML = `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--hair)">
+      <select id="vDis" style="margin-bottom:8px">${ds.map(([k, d]) =>
+        `<option value="${k}">${esc((d.name || {})[LANG] || d.name.en)}</option>`).join('')}</select>
+      <input id="vDate" type="date" value="${new Date().toISOString().slice(0, 10)}" style="margin-bottom:8px">
+      <input id="vVac" placeholder="${LANG === 'en' ? 'Vaccine / batch (optional)' : 'लस / बैच (वैकल्पिक)'}" style="margin-bottom:8px">
+      <div style="display:flex;gap:8px">
+        <button class="btn green sm" id="vSave" style="flex:1">${t('save')}</button>
+        <button class="btn outline sm" id="vCancel">${t('cancel')}</button></div></div>`;
+    box.querySelector('#vCancel').onclick = () => { box.innerHTML = ''; };
+    box.querySelector('#vSave').onclick = async () => {
+      try {
+        await API.post(`/api/animals/${animalId}/vaccination`, {
+          disease_key: box.querySelector('#vDis').value,
+          given_on: box.querySelector('#vDate').value,
+          vaccine: box.querySelector('#vVac').value });
+        toast(`✅ ${t('vacc_added')} · ${t('saved_db')}`, 'ok');
+        healthRecord(animalId);
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  };
+}
+
+function openModal() { document.getElementById('modalBg').classList.add('open'); }
+function closeModal() { document.getElementById('modalBg').classList.remove('open'); }
+document.getElementById('modalBg').addEventListener('click', e => {
+  if (e.target.id === 'modalBg') closeModal();
+});
 
 function renderLens(out, r, dataUrl) {
   const img = `<img src="${dataUrl}" style="width:100%;border-radius:12px;margin-top:12px">`;

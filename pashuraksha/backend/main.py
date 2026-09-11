@@ -37,13 +37,14 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
-    # lightweight migration for databases created before this column existed
-    try:
-        with engine.begin() as conn:
-            conn.exec_driver_sql(
-                "ALTER TABLE treatments ADD COLUMN withdrawal_days INTEGER DEFAULT 0")
-    except Exception:
-        pass
+    # lightweight migrations for databases created before these columns existed
+    for ddl in ("ALTER TABLE treatments ADD COLUMN withdrawal_days INTEGER DEFAULT 0",
+                "ALTER TABLE cases ADD COLUMN breed VARCHAR"):
+        try:
+            with engine.begin() as conn:
+                conn.exec_driver_sql(ddl)
+        except Exception:
+            pass
     db = SessionLocal()
     try:
         if seeder.seed_all(db):
@@ -247,6 +248,7 @@ class ReportIn(BaseModel):
     notes: str = ""
     photo: Optional[str] = None
     channel: str = "app"
+    breed: Optional[str] = None
 
 
 @app.post("/api/reports")
@@ -265,9 +267,14 @@ def create_report(body: ReportIn, user: User = Depends(current_user),
     v = db.get(Location, village_id)
     t = intel.triage(body.species, body.symptoms, body.dead_count,
                      body.affected_count)
+    # breed: explicit, else inherited from the tagged animal (historical trends)
+    breed = body.breed
+    if not breed and body.animal_id:
+        an = db.get(Animal, body.animal_id)
+        breed = an.breed if an else None
     c = Case(client_uuid=body.client_uuid, village_id=village_id,
              farmer_id=fm.id if fm else None, animal_id=body.animal_id,
-             species=body.species, symptoms=",".join(body.symptoms),
+             species=body.species, breed=breed, symptoms=",".join(body.symptoms),
              affected_count=body.affected_count, dead_count=body.dead_count,
              onset_date=date.today(), channel=body.channel,
              photo=body.photo, notes=body.notes, lat=v.lat, lon=v.lon,
@@ -297,7 +304,7 @@ def _case_out(db, c: Case, triage_reasons=None, dedup=False):
     sus_names = [kb["diseases"][k]["name"]["en"]
                  for k in (c.suspected or "").split(",") if k in kb["diseases"]]
     return {"id": c.id, "village": v.name if v else None,
-            "village_id": c.village_id, "species": c.species,
+            "village_id": c.village_id, "species": c.species, "breed": c.breed,
             "symptoms": (c.symptoms or "").split(","),
             "affected_count": c.affected_count, "dead_count": c.dead_count,
             "reported_at": c.reported_at.isoformat() if c.reported_at else None,
@@ -1364,6 +1371,340 @@ def assistant_chat(body: ChatIn, user: User = Depends(current_user),
             action["species"] = None
     audit(db, user.id, "assistant_llm", f"{_GEMINI_OK['model']} q={body.query[:60]}"); db.commit()
     return {"reply": reply, "action": action, "model": _GEMINI_OK["model"], "provider": "Google Gemini"}
+
+
+# ------------------------------------------------- historical disease trends --
+# "which areas, which disease, which animals, which breeds" — the evidence base
+# the PS asks for ("integrate ... historical disease trends", "stronger
+# evidence-based planning").
+def _area_of(db, village_id, level):
+    v = db.get(Location, village_id)
+    if not v:
+        return None
+    if level == "village":
+        return v
+    blk = db.get(Location, v.parent_id) if v.parent_id else None
+    if level == "block":
+        return blk
+    return db.get(Location, blk.parent_id) if blk and blk.parent_id else None
+
+
+@app.get("/api/history")
+def history(months: int = 12, level: str = "block", district: Optional[str] = None,
+            disease: Optional[str] = None, species: Optional[str] = None,
+            user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Historical disease records aggregated by area / disease / species / breed."""
+    months = max(1, min(36, months))
+    since = datetime.utcnow() - timedelta(days=months * 30)
+    level = level if level in ("village", "block", "district") else "block"
+    kb = intel.load_kb()
+
+    q = db.query(Case).filter(Case.reported_at >= since)
+    if species:
+        q = q.filter(Case.species == species)
+    rows = q.order_by(Case.reported_at.desc()).all()
+
+    def dname(key):
+        d = kb["diseases"].get(key or "", {})
+        return d.get("name", {}).get("en", key or "Undiagnosed")
+
+    by_area, by_disease, by_species, by_breed, by_month = {}, {}, {}, {}, {}
+    detail, confirmed_total, deaths_total = [], 0, 0
+    for c in rows:
+        key = (c.suspected or "").split(",")[0] if c.suspected else ""
+        if disease and key != disease:
+            continue
+        area = _area_of(db, c.village_id, level)
+        dist = _area_of(db, c.village_id, "district")
+        if district and (not dist or dist.name != district):
+            continue
+        aname = area.name if area else "—"
+        dn = dname(key)
+        mon = c.reported_at.strftime("%Y-%m")
+        n = c.affected_count or 1
+
+        a = by_area.setdefault(aname, {"area": aname, "cases": 0, "animals": 0,
+                                       "deaths": 0, "diseases": {}, "breeds": {},
+                                       "district": dist.name if dist else None})
+        a["cases"] += 1; a["animals"] += n; a["deaths"] += c.dead_count or 0
+        a["diseases"][dn] = a["diseases"].get(dn, 0) + 1
+        if c.breed:
+            a["breeds"][c.breed] = a["breeds"].get(c.breed, 0) + 1
+
+        d = by_disease.setdefault(dn, {"disease": dn, "key": key, "cases": 0,
+                                       "animals": 0, "deaths": 0, "areas": {},
+                                       "species": {}, "breeds": {},
+                                       "zoonotic": bool(kb["diseases"].get(key, {}).get("zoonotic"))})
+        d["cases"] += 1; d["animals"] += n; d["deaths"] += c.dead_count or 0
+        d["areas"][aname] = d["areas"].get(aname, 0) + 1
+        d["species"][c.species] = d["species"].get(c.species, 0) + 1
+        if c.breed:
+            d["breeds"][c.breed] = d["breeds"].get(c.breed, 0) + 1
+
+        s = by_species.setdefault(c.species, {"species": c.species, "cases": 0,
+                                              "animals": 0, "deaths": 0, "breeds": {}})
+        s["cases"] += 1; s["animals"] += n; s["deaths"] += c.dead_count or 0
+        if c.breed:
+            s["breeds"][c.breed] = s["breeds"].get(c.breed, 0) + 1
+            b = by_breed.setdefault(c.breed, {"breed": c.breed, "species": c.species,
+                                              "cases": 0, "animals": 0, "deaths": 0,
+                                              "diseases": {}})
+            b["cases"] += 1; b["animals"] += n; b["deaths"] += c.dead_count or 0
+            b["diseases"][dn] = b["diseases"].get(dn, 0) + 1
+
+        m = by_month.setdefault(mon, {"month": mon, "cases": 0, "deaths": 0, "diseases": {}})
+        m["cases"] += 1; m["deaths"] += c.dead_count or 0
+        m["diseases"][dn] = m["diseases"].get(dn, 0) + 1
+
+        if c.status == "CONFIRMED":
+            confirmed_total += 1
+        deaths_total += c.dead_count or 0
+        if len(detail) < 300:
+            v = db.get(Location, c.village_id)
+            detail.append({"id": c.id, "date": c.reported_at.strftime("%Y-%m-%d"),
+                           "village": v.name if v else None, "area": aname,
+                           "district": dist.name if dist else None,
+                           "disease": dn, "species": c.species, "breed": c.breed,
+                           "affected": n, "deaths": c.dead_count or 0,
+                           "status": c.status, "triage": c.triage_band,
+                           "zoonotic": bool(c.zoonotic_flag)})
+
+    def top(d):
+        return sorted(d.items(), key=lambda x: -x[1])[:3]
+
+    for a in by_area.values():
+        a["top_disease"] = top(a["diseases"])[0][0] if a["diseases"] else "—"
+        a["top_breeds"] = [{"breed": k, "cases": v} for k, v in top(a["breeds"])]
+    for d in by_disease.values():
+        d["top_area"] = top(d["areas"])[0][0] if d["areas"] else "—"
+        d["top_breeds"] = [{"breed": k, "cases": v} for k, v in top(d["breeds"])]
+        d["species_list"] = [{"species": k, "cases": v} for k, v in top(d["species"])]
+    for s in by_species.values():
+        s["top_breeds"] = [{"breed": k, "cases": v} for k, v in top(s["breeds"])]
+    for b in by_breed.values():
+        b["top_disease"] = top(b["diseases"])[0][0] if b["diseases"] else "—"
+
+    districts = sorted({l.name for l in db.query(Location).filter(Location.level == "district")})
+    return {
+        "months": months, "level": level,
+        "filters": {"district": district, "disease": disease, "species": species},
+        "options": {"districts": districts,
+                    "diseases": [{"key": k, "name": v["name"]["en"]} for k, v in kb["diseases"].items()],
+                    "species": ["cattle", "buffalo", "goat", "sheep", "poultry", "pig"]},
+        "totals": {"cases": sum(a["cases"] for a in by_area.values()),
+                   "animals": sum(a["animals"] for a in by_area.values()),
+                   "deaths": deaths_total, "confirmed": confirmed_total,
+                   "areas": len(by_area), "diseases": len(by_disease),
+                   "breeds": len(by_breed)},
+        "by_area": sorted(by_area.values(), key=lambda x: -x["cases"])[:40],
+        "by_disease": sorted(by_disease.values(), key=lambda x: -x["cases"]),
+        "by_species": sorted(by_species.values(), key=lambda x: -x["cases"]),
+        "by_breed": sorted(by_breed.values(), key=lambda x: -x["cases"])[:25],
+        "by_month": sorted(by_month.values(), key=lambda x: x["month"]),
+        "detail": detail,
+    }
+
+
+@app.get("/api/history/village")
+def village_history(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Past disease record of the farmer's own village — what hit here before."""
+    fm = db.query(Farmer).filter(Farmer.user_id == user.id).first()
+    vid = fm.village_id if fm else user.location_id
+    if not vid:
+        return {"village": None, "years": [], "diseases": []}
+    v = db.get(Location, vid)
+    kb = intel.load_kb()
+    since = datetime.utcnow() - timedelta(days=365 * 3)
+    rows = db.query(Case).filter(Case.village_id == vid, Case.reported_at >= since).all()
+    dis, seasons = {}, {}
+    for c in rows:
+        key = (c.suspected or "").split(",")[0] if c.suspected else ""
+        d = kb["diseases"].get(key, {})
+        nm = d.get("name", {})
+        label = nm.get(user.lang or "hi") or nm.get("en") or "—"
+        if not key:
+            continue
+        e = dis.setdefault(key, {"key": key, "name": label, "name_en": nm.get("en", key),
+                                 "cases": 0, "deaths": 0, "breeds": {},
+                                 "zoonotic": bool(d.get("zoonotic")), "last": None})
+        e["cases"] += 1; e["deaths"] += c.dead_count or 0
+        if c.breed:
+            e["breeds"][c.breed] = e["breeds"].get(c.breed, 0) + 1
+        ds = c.reported_at.strftime("%Y-%m-%d")
+        if not e["last"] or ds > e["last"]:
+            e["last"] = ds
+        seasons.setdefault(c.reported_at.month, 0)
+        seasons[c.reported_at.month] += 1
+    for e in dis.values():
+        e["top_breeds"] = [k for k, _ in sorted(e["breeds"].items(), key=lambda x: -x[1])[:2]]
+    return {"village": v.name if v else None,
+            "diseases": sorted(dis.values(), key=lambda x: -x["cases"])[:8],
+            "peak_months": sorted(seasons, key=lambda m: -seasons[m])[:3],
+            "total_cases": len(rows)}
+
+
+# ------------------------------------- animal-level health / vaccination record
+@app.get("/api/animals/{animal_id}/health")
+def animal_health(animal_id: int, user: User = Depends(current_user),
+                  db: Session = Depends(get_db)):
+    """Complete animal-level health, vaccination and treatment record (PS)."""
+    a = db.get(Animal, animal_id)
+    if not a:
+        raise HTTPException(404, "Animal not found")
+    fm = db.query(Farmer).filter(Farmer.user_id == user.id).first()
+    if user.role == "farmer" and (not fm or a.farmer_id != fm.id):
+        raise HTTPException(403, "Not your animal")
+    kb = intel.load_kb()
+    lg = user.lang if user.lang in ("hi", "mr", "en") else "hi"
+
+    def dn(key):
+        nm = kb["diseases"].get(key or "", {}).get("name", {})
+        return nm.get(lg) or nm.get("en") or key
+
+    vaccs = (db.query(Vaccination).filter(Vaccination.animal_id == animal_id)
+               .order_by(Vaccination.given_on.desc()).all())
+    cases = (db.query(Case).filter(Case.animal_id == animal_id)
+               .order_by(Case.reported_at.desc()).all())
+    timeline = []
+    for v in vaccs:
+        timeline.append({"kind": "vaccination", "at": str(v.given_on),
+                         "title": dn(v.disease_key), "detail": v.vaccine or "",
+                         "extra": f"due {v.due_on}", "campaign": v.campaign})
+    for c in cases:
+        timeline.append({"kind": "case", "at": c.reported_at.strftime("%Y-%m-%d"),
+                         "title": f"#{c.id} " + (dn((c.suspected or '').split(',')[0])
+                                                 if c.suspected else "Case"),
+                         "detail": c.symptoms or "", "extra": c.status,
+                         "band": c.triage_band})
+        for tr in db.query(Treatment).filter(Treatment.case_id == c.id).all():
+            timeline.append({"kind": "treatment", "at": tr.given_at.strftime("%Y-%m-%d"),
+                             "title": tr.diagnosis or "Treatment",
+                             "detail": tr.treatment or "",
+                             "extra": (f"{tr.withdrawal_days}d withdrawal"
+                                       if tr.withdrawal_days else ""),
+                             "vet": (db.get(User, tr.vet_id).name if tr.vet_id else None)})
+        for s in db.query(Sample).filter(Sample.case_id == c.id).all():
+            timeline.append({"kind": "sample", "at": s.collected_at.strftime("%Y-%m-%d"),
+                             "title": f"Sample {s.code}",
+                             "detail": s.lab_result or s.status,
+                             "extra": dn(s.result_disease) if s.result_disease else ""})
+    timeline.sort(key=lambda x: x["at"], reverse=True)
+    due = []
+    for key, d in kb["diseases"].items():
+        if a.species not in (d.get("species") or []):
+            continue
+        last = next((v for v in vaccs if v.disease_key == key), None)
+        if not last:
+            due.append({"disease": key, "name": dn(key), "status": "never"})
+        elif last.due_on and last.due_on <= date.today():
+            due.append({"disease": key, "name": dn(key), "status": "overdue",
+                        "due_on": str(last.due_on)})
+    v = db.get(Location, a.village_id)
+    return {"id": a.id, "tag_id": a.tag_id, "species": a.species, "breed": a.breed,
+            "sex": a.sex, "age_months": a.age_months,
+            "village": v.name if v else None,
+            "vaccinations": [{"id": x.id, "disease": x.disease_key, "name": dn(x.disease_key),
+                              "vaccine": x.vaccine, "given_on": str(x.given_on),
+                              "due_on": str(x.due_on), "campaign": x.campaign} for x in vaccs],
+            "cases": [_case_out(db, c) for c in cases[:10]],
+            "timeline": timeline[:40], "due": due[:6],
+            "withdrawal": _withdrawal_status(db, a.id),
+            "permit": _permit_status(db, a.village_id, a.id)}
+
+
+class VaccIn(BaseModel):
+    disease_key: str
+    vaccine: str = ""
+    given_on: Optional[str] = None
+    campaign: str = ""
+
+
+@app.post("/api/animals/{animal_id}/vaccination")
+def add_vaccination(animal_id: int, body: VaccIn, user: User = Depends(current_user),
+                    db: Session = Depends(get_db)):
+    """Record a vaccination — farmer (own animal), field worker or vet."""
+    a = db.get(Animal, animal_id)
+    if not a:
+        raise HTTPException(404, "Animal not found")
+    fm = db.query(Farmer).filter(Farmer.user_id == user.id).first()
+    if user.role == "farmer" and (not fm or a.farmer_id != fm.id):
+        raise HTTPException(403, "Not your animal")
+    given = date.fromisoformat(body.given_on) if body.given_on else date.today()
+    v = Vaccination(animal_id=a.id, village_id=a.village_id,
+                    disease_key=body.disease_key, vaccine=body.vaccine or "Govt supply",
+                    given_on=given, due_on=given + timedelta(days=365),
+                    campaign=body.campaign or "Self-reported")
+    db.add(v)
+    audit(db, user.id, "vaccination_add", f"animal {a.tag_id} {body.disease_key}")
+    db.commit()
+    return {"id": v.id, "disease": v.disease_key, "given_on": str(v.given_on),
+            "due_on": str(v.due_on)}
+
+
+# ------------------------------------------------- live cross-dashboard sync --
+# Every dashboard polls this tiny endpoint; when a counter moves, that dashboard
+# refreshes. One officer's action shows up on every other officer's screen.
+@app.get("/api/sync/state")
+def sync_state(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    def last_id(model):
+        row = db.query(func.max(model.id)).scalar()
+        return int(row or 0)
+    counts = {
+        "cases": db.query(func.count(Case.id)).scalar() or 0,
+        "alerts": db.query(func.count(Alert.id)).scalar() or 0,
+        "tasks_open": db.query(func.count(Task.id)).filter(Task.status != "DONE").scalar() or 0,
+        "tasks_done": db.query(func.count(Task.id)).filter(Task.status == "DONE").scalar() or 0,
+        "claims": db.query(func.count(Claim.id)).scalar() or 0,
+        "claims_pending": db.query(func.count(Claim.id))
+                            .filter(Claim.status.in_(["FILED", "UNDER_REVIEW"])).scalar() or 0,
+        "samples": db.query(func.count(Sample.id)).scalar() or 0,
+        "samples_result": db.query(func.count(Sample.id))
+                            .filter(Sample.status == "RESULT").scalar() or 0,
+        "outbreaks": db.query(func.count(Outbreak.id))
+                       .filter(Outbreak.status == "ACTIVE").scalar() or 0,
+        "camps": db.query(func.count(Camp.id)).scalar() or 0,
+        "vaccinations": db.query(func.count(Vaccination.id)).scalar() or 0,
+        "treatments": db.query(func.count(Treatment.id)).scalar() or 0,
+        "animals": db.query(func.count(Animal.id)).scalar() or 0,
+    }
+    # a single version string: any change anywhere flips it
+    version = "-".join(str(v) for v in counts.values()) + f"-{last_id(Case)}-{last_id(Alert)}"
+    last = db.query(AuditLog).order_by(AuditLog.id.desc()).first()
+    return {"version": version, "counts": counts,
+            "server_time": datetime.utcnow().isoformat(),
+            "last_action": ({"action": last.action, "detail": last.detail,
+                             "at": last.at.isoformat(),
+                             "by": (db.get(User, last.user_id).name
+                                    if last.user_id and db.get(User, last.user_id) else None)}
+                            if last else None)}
+
+
+@app.get("/api/db/health")
+def db_health(db: Session = Depends(get_db)):
+    """Proof the database is persisting: file, size, row counts, last writes."""
+    url = str(engine.url)
+    path, size = None, None
+    if url.startswith("sqlite"):
+        path = engine.url.database
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            size = None
+    tables = {}
+    for name, model in (("locations", Location), ("users", User), ("farmers", Farmer),
+                        ("animals", Animal), ("cases", Case), ("vaccinations", Vaccination),
+                        ("treatments", Treatment), ("samples", Sample),
+                        ("outbreaks", Outbreak), ("alerts", Alert), ("claims", Claim),
+                        ("tasks", Task), ("camps", Camp), ("risk_scores", RiskScore),
+                        ("weather_obs", WeatherObservation), ("audit_log", AuditLog)):
+        tables[name] = db.query(func.count(model.id)).scalar() or 0
+    recent = (db.query(AuditLog).order_by(AuditLog.id.desc()).limit(8).all())
+    return {"engine": url.split("://")[0], "path": path,
+            "size_kb": round(size / 1024, 1) if size else None,
+            "persistent": bool(path) or not url.startswith("sqlite"),
+            "tables": tables, "total_rows": sum(tables.values()),
+            "recent_writes": [{"at": r.at.isoformat(), "action": r.action,
+                               "detail": r.detail} for r in recent]}
 
 
 # --------------------------------------------------------------------- demo --
