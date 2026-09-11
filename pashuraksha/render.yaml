@@ -1,0 +1,39 @@
+# Render Blueprint — deploys PashuAarogya as ONE web service that serves both
+# the API and the frontend (they are already a single FastAPI app), plus a
+# free Postgres database so records survive restarts and redeploys.
+#
+#   Render dashboard → New → Blueprint → point at this repo.
+#
+# Everything below is free-tier. Two known free-tier limits, both handled:
+#   * the disk is ephemeral  → we use Postgres, never the SQLite file
+#   * the service sleeps after 15 min idle → see the keep-alive note in DEPLOY.md
+services:
+  - type: web
+    name: pashuaarogya
+    runtime: python
+    plan: free
+    region: singapore                 # closest Render region to India
+    rootDir: pashuraksha
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd backend && python main.py
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: PASHU_DB_URL             # wired to the database below
+        fromDatabase:
+          name: pashuaarogya-db
+          property: connectionString
+      - key: PASHU_SECRET             # signs the session tokens
+        generateValue: true
+      - key: GEMINI_API_KEY           # Pashu Mitra's brain — paste in the dashboard
+        sync: false
+      - key: PASHU_AI_URL             # optional Pashu Lens sidecar (see DEPLOY.md)
+        sync: false
+
+databases:
+  - name: pashuaarogya-db
+    plan: free
+    region: singapore
+    databaseName: pashuaarogya

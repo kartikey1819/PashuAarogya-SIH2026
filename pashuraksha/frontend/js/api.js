@@ -1,6 +1,15 @@
 /* PashuRaksha shared API client + offline report queue + helpers */
+/* API origin.
+   Same-origin by default (backend serves this app). If the frontend is hosted
+   separately — Vercel/Netlify in front of a Render backend — set it with either
+     <meta name="pashu-api" content="https://your-api.onrender.com">
+   or  <script>window.PASHU_API = 'https://your-api.onrender.com'</script>
+   placed before this file. Auth is a Bearer token, not a cookie, so a plain
+   CORS allow-list is enough — no credentialed-request setup needed. */
 const API = {
-  base: '',
+  base: (window.PASHU_API ||
+         (document.querySelector('meta[name="pashu-api"]') || {}).content ||
+         '').replace(/\/+$/, ''),
   token: localStorage.getItem('pr_token') || '',
   user: JSON.parse(localStorage.getItem('pr_user') || 'null'),
 

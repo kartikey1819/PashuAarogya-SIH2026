@@ -36,6 +36,13 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
 # ------------------------------------------------------------------ startup --
 @app.on_event("startup")
 def startup():
+    """Create tables, then seed in a background thread.
+
+    On a managed Postgres every insert is a network round-trip, so seeding the
+    demo world takes far longer than it does against local SQLite. Doing it
+    inline would hold the port closed past a platform health-check timeout, so
+    the app starts serving immediately and reports progress on /healthz.
+    """
     Base.metadata.create_all(bind=engine)
     # lightweight migrations for databases created before these columns existed
     for ddl in ("ALTER TABLE treatments ADD COLUMN withdrawal_days INTEGER DEFAULT 0",
@@ -45,12 +52,23 @@ def startup():
                 conn.exec_driver_sql(ddl)
         except Exception:
             pass
-    db = SessionLocal()
-    try:
-        if seeder.seed_all(db):
-            intel.refresh_all(db)
-    finally:
-        db.close()
+    def _seed():
+        db = SessionLocal()
+        try:
+            BOOT["stage"] = "seeding"
+            if seeder.seed_all(db):
+                BOOT["stage"] = "computing risk"
+                intel.refresh_all(db)
+            BOOT["stage"] = "ready"
+        except Exception as e:                      # never kill the process
+            BOOT["stage"] = "error"
+            BOOT["error"] = str(e)[:300]
+        finally:
+            BOOT["ready"] = True
+            db.close()
+
+    import threading
+    threading.Thread(target=_seed, daemon=True).start()
 
 
 # --------------------------------------------------------------------- auth --
@@ -949,6 +967,24 @@ def export_csv(what: str, db: Session = Depends(get_db)):
 
 
 
+BOOT = {"ready": False, "stage": "starting", "error": None,
+        "started": datetime.utcnow().isoformat()}
+
+
+@app.get("/healthz")
+def healthz(db: Session = Depends(get_db)):
+    """Platform health check + keep-alive target. Always 200 once the process
+    is up; `ready` says whether the demo data has finished loading."""
+    try:
+        n = db.query(func.count(Location.id)).scalar() or 0
+    except Exception:
+        n = -1
+    return {"ok": True, "ready": BOOT["ready"], "stage": BOOT["stage"],
+            "error": BOOT["error"], "locations": n,
+            "db": "postgres" if "postgres" in str(engine.url) else "sqlite",
+            "started": BOOT["started"], "now": datetime.utcnow().isoformat()}
+
+
 @app.get("/api/hostinfo")
 def hostinfo():
     """Addresses a phone can use: the public HTTPS tunnel (any network —
@@ -1732,4 +1768,5 @@ app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Render / Railway / Fly inject the port to bind. Local default stays 8000.
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))
