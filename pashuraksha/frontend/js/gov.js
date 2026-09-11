@@ -526,7 +526,8 @@ async function history() {
     <div class="panel-note">Every case ever reported, aggregated by <b>area · disease · species · breed · month</b>.
       This is the evidence base for vaccination planning and the seasonal prior the Outbreak Radar scores against.
       Filter it, then export from <b>Reports</b>.</div>
-    <div class="kpis" id="hKpis"></div>
+    <div class="kpis" id="hKpis"><div class="card" style="grid-column:1/-1;text-align:center;
+      padding:22px;color:var(--muted)">⏳ Loading historical records…</div></div>
     <div class="card" style="margin-top:16px"><h3>Cases &amp; deaths by month</h3>
       <canvas id="hChart" height="90"></canvas></div>
     <div class="grid g2" style="margin-top:16px">
