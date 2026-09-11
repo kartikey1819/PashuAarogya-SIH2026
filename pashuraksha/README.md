@@ -53,7 +53,7 @@ Manual start: `cd <that folder> && .venv\Scripts\python -m uvicorn app:app --por
 ngrok is for your laptop. For a permanently-live URL see **[DEPLOY.md](DEPLOY.md)** —
 one Render web service (the backend already serves the frontend), a free Postgres so
 records survive restarts, and the honest constraint on where the 235 MB breed model
-can run. `render.yaml` in this folder is a one-click Blueprint.
+can run. `render.yaml` at the repository root is a one-click Blueprint.
 
 ## 📱 Run it on a phone — from anywhere, no shared Wi-Fi
 

@@ -43,8 +43,12 @@ Merge it to `main` first if you want Render's default branch to work out of the 
 
 ### 2. Create the service
 Render dashboard → **New → Blueprint** → pick this repo. It reads
-[`render.yaml`](render.yaml) and creates both the web service and a free Postgres
-database, already wired together.
+[`render.yaml`](../render.yaml) and creates both the web service and a free
+Postgres database, already wired together.
+
+> `render.yaml` lives at the **repository root**, not in `pashuraksha/` — Render
+> only looks at the root. `rootDir: pashuraksha` inside it points the build at
+> the app.
 
 Prefer clicking through manually? **New → Web Service**, then:
 
