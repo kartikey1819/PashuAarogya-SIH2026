@@ -8,16 +8,47 @@
   "display": "standalone",
   "orientation": "portrait",
   "theme_color": "#1B4C8C",
-  "background_color": "#F7F5F0",
+  "background_color": "#3F4140",
   "lang": "hi",
-  "categories": ["government", "health", "agriculture"],
+  "categories": [
+    "government",
+    "health",
+    "agriculture"
+  ],
   "icons": [
-    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "/icons/favicon-32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ],
   "shortcuts": [
-    { "name": "बीमार पशु की रिपोर्ट करें", "short_name": "रिपोर्ट",
-      "url": "/farmer.html", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+    {
+      "name": "बीमार पशु की रिपोर्ट करें",
+      "short_name": "रिपोर्ट",
+      "url": "/farmer.html",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
   ]
 }
