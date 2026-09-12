@@ -145,6 +145,40 @@ Keep in mind the two instances have **separate databases** — a report filed on
 ngrok will not appear on Render. That is fine for a backup; just don't present
 from both at once.
 
+### Troubleshooting: the service times out on *every* URL
+
+Symptom: `/healthz`, `/api/...` and even `/` all hang until the client gives up,
+and Render shows "SERVICE WAKING UP" forever or restarts in a loop.
+
+That is not a cold start and not a crash — **the port never opened.** A web
+server only starts accepting connections after its startup handler returns, so
+any startup work that blocks keeps the whole service invisible. Here the culprit
+was the database: `create_all()` ran inline, and an unreachable Postgres made it
+wait on TCP for minutes. Render's health check timed out, Render restarted it,
+and the loop repeated.
+
+Fixed in the app, so it cannot happen again:
+
+| | Before | Now |
+|---|---|---|
+| Table creation + seeding | inline in the startup handler | in a background thread |
+| Postgres connect timeout | OS default (minutes) | **10 s** (`database.py`) |
+| `/healthz` | took a DB session — hung when the DB hung | **no DB dependency**, always answers |
+| A bad database looks like | the service never starting | `{"stage":"error","error":"OperationalError: ..."}` |
+
+So if the database is wrong now, `/healthz` tells you in about ten seconds:
+
+```json
+{"ok":true,"ready":true,"stage":"error","db_host":"...singapore-postgres.render.com:5432",
+ "error":"OperationalError: connection to server at ... failed: timeout expired"}
+```
+
+Read `stage` first — `connecting` → `seeding` → `computing risk` → `ready`, or
+`error` with the reason. `db_host` confirms which database it actually reached,
+which catches the most common mistake of all: `PASHU_DB_URL` never being set, or
+pointing at a Postgres instance Render has since expired (the free database is
+removed after 30 days — create a new one, or use Neon, and update the variable).
+
 ### 7. Keep it awake
 Free Render services sleep after 15 minutes idle and take ~50 s to wake — fatal
 mid-presentation. Point a free uptime pinger

@@ -3,7 +3,7 @@
 Run:  python main.py        (from backend/)
 Then open http://127.0.0.1:8000
 """
-import os, json, hmac, base64, hashlib, random, time
+import os, json, hmac, base64, hashlib, random, time, traceback
 from datetime import datetime, date, timedelta
 from typing import Optional
 
@@ -43,32 +43,43 @@ def startup():
     inline would hold the port closed past a platform health-check timeout, so
     the app starts serving immediately and reports progress on /healthz.
     """
-    Base.metadata.create_all(bind=engine)
-    # lightweight migrations for databases created before these columns existed
-    for ddl in ("ALTER TABLE treatments ADD COLUMN withdrawal_days INTEGER DEFAULT 0",
-                "ALTER TABLE cases ADD COLUMN breed VARCHAR"):
+    _u = str(engine.url)
+    print(f"[boot] database = {_u.split('@')[-1] if '@' in _u else _u}", flush=True)
+
+    def _boot():
+        # EVERY database call lives in here, table creation included. If the
+        # database is unreachable this thread fails while the web server keeps
+        # serving, so /healthz can report the reason -- instead of the platform
+        # seeing a process that never opens its port and restarting it forever.
         try:
-            with engine.begin() as conn:
-                conn.exec_driver_sql(ddl)
-        except Exception:
-            pass
-    def _seed():
-        db = SessionLocal()
-        try:
-            BOOT["stage"] = "seeding"
-            if seeder.seed_all(db):
-                BOOT["stage"] = "computing risk"
-                intel.refresh_all(db)
-            BOOT["stage"] = "ready"
+            BOOT["stage"] = "connecting"
+            Base.metadata.create_all(bind=engine)
+            # migrations for databases created before these columns existed
+            for ddl in ("ALTER TABLE treatments ADD COLUMN withdrawal_days INTEGER DEFAULT 0",
+                        "ALTER TABLE cases ADD COLUMN breed VARCHAR"):
+                try:
+                    with engine.begin() as conn:
+                        conn.exec_driver_sql(ddl)
+                except Exception:
+                    pass
+            db = SessionLocal()
+            try:
+                BOOT["stage"] = "seeding"
+                if seeder.seed_all(db):
+                    BOOT["stage"] = "computing risk"
+                    intel.refresh_all(db)
+                BOOT["stage"] = "ready"
+            finally:
+                db.close()
         except Exception as e:                      # never kill the process
             BOOT["stage"] = "error"
-            BOOT["error"] = str(e)[:300]
+            BOOT["error"] = f"{type(e).__name__}: {e}"[:400]
+            traceback.print_exc()
         finally:
             BOOT["ready"] = True
-            db.close()
 
     import threading
-    threading.Thread(target=_seed, daemon=True).start()
+    threading.Thread(target=_boot, daemon=True).start()
 
 
 # --------------------------------------------------------------------- auth --
@@ -972,16 +983,27 @@ BOOT = {"ready": False, "stage": "starting", "error": None,
 
 
 @app.get("/healthz")
-def healthz(db: Session = Depends(get_db)):
-    """Platform health check + keep-alive target. Always 200 once the process
-    is up; `ready` says whether the demo data has finished loading."""
-    try:
-        n = db.query(func.count(Location.id)).scalar() or 0
-    except Exception:
-        n = -1
+def healthz():
+    """Platform health check + keep-alive target.
+
+    Deliberately takes NO database dependency: if it did, a bad database would
+    make the health check hang, the platform would restart the service, and the
+    real cause would never be visible. Always 200 once the process is up;
+    `stage`/`error` say what the database is doing.
+    """
+    n = None
+    if BOOT["ready"] and BOOT["stage"] == "ready":
+        try:
+            db = SessionLocal()
+            n = db.query(func.count(Location.id)).scalar() or 0
+            db.close()
+        except Exception:
+            n = -1
+    url = str(engine.url)
     return {"ok": True, "ready": BOOT["ready"], "stage": BOOT["stage"],
             "error": BOOT["error"], "locations": n,
-            "db": "postgres" if "postgres" in str(engine.url) else "sqlite",
+            "db": "postgres" if "postgres" in url else "sqlite",
+            "db_host": url.split("@")[-1].split("/")[0] if "@" in url else "local",
             "started": BOOT["started"], "now": datetime.utcnow().isoformat()}
 
 

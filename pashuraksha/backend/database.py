@@ -14,9 +14,14 @@ if DB_URL.startswith("postgres://"):
     DB_URL = DB_URL.replace("postgres://", "postgresql://", 1)
 
 _is_sqlite = DB_URL.startswith("sqlite")
+# A wrong or unreachable Postgres host must fail fast, not hang: without a
+# connect_timeout the driver waits on TCP for minutes, which on a platform
+# looks like "the service never starts" rather than "the database is wrong".
+_connect_args = ({"check_same_thread": False} if _is_sqlite
+                 else {"connect_timeout": 10})
 engine = create_engine(
     DB_URL,
-    connect_args={"check_same_thread": False} if _is_sqlite else {},
+    connect_args=_connect_args,
     # managed Postgres drops idle connections; recycle before it bites
     **({} if _is_sqlite else {"pool_pre_ping": True, "pool_recycle": 280}),
     future=True,
