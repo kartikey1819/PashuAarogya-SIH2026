@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#1B4C8C">
-<link rel="apple-touch-icon" href="/icons/apple-180.png?v=8">
+<link rel="apple-touch-icon" href="/icons/apple-180.png?v=9">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png?v=8">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png?v=9">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PashuAarogya AI</title>
-<link rel="stylesheet" href="/css/app.css?v=8">
+<link rel="stylesheet" href="/css/app.css?v=9">
 <style>
 body{background:var(--paper)}
 .gtop{background:#fff;border-bottom:1px solid var(--hair)}
@@ -101,7 +101,7 @@ footer.lite{border-top:1px solid var(--hair);margin-top:56px;padding:20px;text-a
 <header class="gtop">
   <div class="tricolor"></div>
   <div class="inner">
-    <div class="embl"><img src="/icons/logo-mark.png?v=8" alt="Pashu Aarogya" onerror="this.parentNode.textContent='🐄'"></div>
+    <div class="embl"><img src="/icons/logo-mark.png?v=9" alt="Pashu Aarogya" onerror="this.parentNode.textContent='🐄'"></div>
     <div>
       <h1><span class="mr">पशुआरोग्य</span> · PashuAarogya AI</h1>
       <div class="sub">पशुपालन विभाग, महाराष्ट्र शासन · Dept. of Animal Husbandry &amp; Dairying, Govt. of Maharashtra</div>
@@ -113,7 +113,7 @@ footer.lite{border-top:1px solid var(--hair);margin-top:56px;padding:20px;text-a
 
 <section class="hero">
   <div class="brand-lockup">
-    <img src="/icons/icon-512.png?v=8" alt="Pashu Aarogya" width="132" height="132">
+    <img src="/icons/icon-512.png?v=9" alt="Pashu Aarogya" width="132" height="132">
     <div class="tag">Better Care. Healthier Livestock. Stronger Farmers.</div>
   </div>
   <div class="eyebrow">Early Warning · Rapid Reporting · Coordinated Response</div>
@@ -183,6 +183,26 @@ footer.lite{border-top:1px solid var(--hair);margin-top:56px;padding:20px;text-a
              style="margin:6px 0 14px;letter-spacing:.45em;text-align:center;font-size:20px">
       <button class="btn-go green" onclick="verifyOTP()">Verify &amp; enter →</button>
     </div>
+    <!-- On-the-spot enrolment: a farmer standing in front of you gets an
+         account and is signed in, in one step. -->
+    <div id="stepReg" style="display:none">
+      <label class="muted" style="font-size:12.5px">Farmer's name · शेतकऱ्याचे नाव</label>
+      <input id="regName" placeholder="पूरा नाम" style="margin:6px 0 10px">
+      <label class="muted" style="font-size:12.5px">Mobile number · मोबाइल क्रमांक</label>
+      <input id="regPhone" placeholder="10-digit mobile" inputmode="numeric" maxlength="10"
+             style="margin:6px 0 10px">
+      <label class="muted" style="font-size:12.5px">Village · गाव</label>
+      <select id="regVillage" style="margin:6px 0 14px"></select>
+      <button class="btn-go green" onclick="registerFarmer()">Register &amp; enter →</button>
+      <div style="text-align:center;margin-top:10px">
+        <a href="#" onclick="showReg(false);return false" class="muted"
+           style="font-size:12.5px">← Back to login</a></div>
+    </div>
+    <div id="regLink" style="text-align:center;margin-top:12px;border-top:1px solid var(--hair);padding-top:12px">
+      <span class="muted" style="font-size:12.5px">New farmer? · नया किसान?</span>
+      <a href="#" onclick="showReg(true);return false"
+         style="font-size:13px;font-weight:600;margin-left:6px">🆕 Register here</a>
+    </div>
   </div>
   <div class="login-box" id="phoneBox" style="margin-top:16px;text-align:center;display:none">
     <h3 style="justify-content:center">📱 Open on your phone · मोबाइल पर खोलें</h3>
@@ -197,7 +217,7 @@ footer.lite{border-top:1px solid var(--hair);margin-top:56px;padding:20px;text-a
   AI output is decision support only — diagnosis &amp; treatment remain with registered veterinary
   practitioners · Farmer identity is never exposed on public maps</footer>
 
-<script src="/js/api.js?v=8"></script>
+<script src="/js/api.js?v=9"></script>
 <script>
 const ROLES = [
   { em:'🧑‍🌾', nm:'Farmer · पशुपालक', ds:'Voice reporting in Marathi, compensation claims, camp alerts. Works fully offline.', ph:'9000000001' },
@@ -239,6 +259,39 @@ async function verifyOTP() {
   } catch (e) { toast(e.message, 'err'); }
 }
 document.getElementById('otp').addEventListener('keyup', e => { if (e.key === 'Enter') verifyOTP(); });
+
+/* ------------------------- on-the-spot farmer sign-up --------------------- */
+let VILLAGES = null;
+async function showReg(on) {
+  document.getElementById('step1').style.display = on ? 'none' : '';
+  document.getElementById('step2').style.display = 'none';
+  document.getElementById('stepReg').style.display = on ? '' : 'none';
+  document.getElementById('regLink').style.display = on ? 'none' : '';
+  if (!on || VILLAGES) return;
+  const sel = document.getElementById('regVillage');
+  sel.innerHTML = '<option>…</option>';
+  try {
+    const all = await API.get('/api/locations');
+    VILLAGES = all.filter(l => l.level === 'village');
+    sel.innerHTML = VILLAGES.map(v =>
+      `<option value="${v.id}">${v.name}${v.name_mr ? ' · ' + v.name_mr : ''}</option>`).join('');
+  } catch (e) { sel.innerHTML = '<option value="">(offline)</option>'; }
+}
+
+async function registerFarmer() {
+  const name = document.getElementById('regName').value.trim();
+  const phone = document.getElementById('regPhone').value.replace(/\D/g, '');
+  const village_id = parseInt(document.getElementById('regVillage').value, 10) || null;
+  if (name.length < 2) return toast("Enter the farmer's name", 'err');
+  if (phone.length !== 10) return toast('Enter a 10-digit mobile number', 'err');
+  try {
+    const r = await API.post('/api/auth/register',
+      { name, phone, village_id, lang: localStorage.getItem('pr_lang') || 'hi' });
+    API.setSession(r.token, r.user);
+    toast(r.already ? 'Already registered — signing in' : '✅ Registered — welcome!', 'ok');
+    setTimeout(() => { location.href = DEST[r.user.role] || '/farmer.html'; }, 500);
+  } catch (e) { toast(e.message, 'err'); }
+}
 if (!navigator.onLine) netbar(true);
 
 function countTo(id, target) {

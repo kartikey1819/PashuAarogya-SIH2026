@@ -15,7 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db, SessionLocal
-from models import (Location, User, Farmer, Animal, Case, Vaccination,
+from models import (Location, User, Farmer, Animal, Case, Vaccination, HealthCentre,
                     Treatment, Sample, RiskScore, Outbreak, Alert, AuditLog,
                     WeatherObservation, Claim, Task, Camp)
 import engine as intel
@@ -265,6 +265,25 @@ def add_animal(body: AnimalIn, user: User = Depends(current_user),
     return {"id": a.id, "tag_id": tag}
 
 
+def _resolve_onset(body) -> date:
+    """When the animal actually fell ill, as the farmer reported it.
+
+    Accepts an ISO date or a number of days ago, clamps to a sane window
+    (not in the future, not more than a year back) and falls back to today.
+    """
+    today = date.today()
+    try:
+        if body.onset_date:
+            d = date.fromisoformat(str(body.onset_date)[:10])
+            return min(max(d, today - timedelta(days=365)), today)
+        if body.onset_days_ago is not None:
+            n = max(0, min(int(body.onset_days_ago), 365))
+            return today - timedelta(days=n)
+    except (ValueError, TypeError):
+        pass
+    return today
+
+
 # ------------------------------------------------------------------ reports --
 class ReportIn(BaseModel):
     client_uuid: Optional[str] = None
@@ -278,6 +297,11 @@ class ReportIn(BaseModel):
     photo: Optional[str] = None
     channel: str = "app"
     breed: Optional[str] = None
+    # How long the animal has been ill. The PS's first expected outcome is
+    # "reduced reporting time", which is unmeasurable without this: before, the
+    # onset was silently stamped as today and every delay came out as zero.
+    onset_date: Optional[str] = None        # ISO date from a picker
+    onset_days_ago: Optional[int] = None    # or "3 days" from the voice interview
 
 
 @app.post("/api/reports")
@@ -305,7 +329,7 @@ def create_report(body: ReportIn, user: User = Depends(current_user),
              farmer_id=fm.id if fm else None, animal_id=body.animal_id,
              species=body.species, breed=breed, symptoms=",".join(body.symptoms),
              affected_count=body.affected_count, dead_count=body.dead_count,
-             onset_date=date.today(), channel=body.channel,
+             onset_date=_resolve_onset(body), channel=body.channel,
              photo=body.photo, notes=body.notes, lat=v.lat, lon=v.lon,
              triage_band=t["band"], triage_score=t["score"],
              suspected=t["suspected"], zoonotic_flag=t["zoonotic"],
@@ -536,12 +560,20 @@ def dashboard_summary(db: Session = Depends(get_db)):
     total = db.query(func.count(Animal.id)).scalar() or 1
     vacc = db.query(func.count(func.distinct(Vaccination.animal_id))).filter(
         Vaccination.given_on >= date.today() - timedelta(days=365)).scalar()
-    # median report->awareness lag in hours (reported_at vs onset)
+    # median onset->report lag in hours: the PS's first expected outcome,
+    # measurable now that the farmer is asked when the animal fell ill
+    rows = db.query(Case.onset_date, Case.reported_at).filter(
+        Case.reported_at >= now - timedelta(days=30),
+        Case.onset_date.isnot(None), Case.reported_at.isnot(None)).all()
+    lags = sorted(max(0.0, (rp - datetime.combine(on, datetime.min.time())).total_seconds() / 3600.0)
+                  for on, rp in rows)
+    median_lag = round(lags[len(lags) // 2], 1) if lags else None
     return {"total_animals": total_animals, "active_cases": active_cases,
             "cases_7d": cases_7d, "deaths_7d": int(deaths_7d),
             "high_risk_villages": high_villages, "active_outbreaks": outbreaks,
             "pending_lab": pending_lab,
-            "vaccination_coverage": round(vacc / total, 3)}
+            "vaccination_coverage": round(vacc / total, 3),
+            "median_report_lag_h": median_lag, "lag_sample": len(lags)}
 
 
 @app.get("/api/dashboard/map")
@@ -1743,6 +1775,10 @@ def sync_state(user: User = Depends(current_user), db: Session = Depends(get_db)
         "vaccinations": db.query(func.count(Vaccination.id)).scalar() or 0,
         "treatments": db.query(func.count(Treatment.id)).scalar() or 0,
         "animals": db.query(func.count(Animal.id)).scalar() or 0,
+        # live enrolment: lets every open dashboard show a new farmer within
+        # one poll, which is the whole point of registering people on stage
+        "registrations": db.query(func.count(AuditLog.id))
+                           .filter(AuditLog.action == "register").scalar() or 0,
     }
     # a single version string: any change anywhere flips it
     version = "-".join(str(v) for v in counts.values()) + f"-{last_id(Case)}-{last_id(Alert)}"
@@ -1799,6 +1835,146 @@ def audit_log(db: Session = Depends(get_db)):
     users = {u.id: u.name for u in db.query(User).all()}
     return [{"at": r.at.isoformat(), "user": users.get(r.user_id, "?"),
              "action": r.action, "detail": r.detail} for r in rows]
+
+
+# ------------------------------------------------- nearby health centres --
+@app.get("/api/health-centres")
+def health_centres(village_id: Optional[int] = None, limit: int = 8,
+                   user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Where a farmer can take the animal, nearest first.
+
+    The PS names distant diagnostic facilities as a pain point, so the farmer
+    gets the real ladder -- block dispensary, district polyclinic, district lab
+    -- plus the 1962 mobile unit that comes to the door.
+    """
+    vid = village_id or user.location_id
+    v = db.get(Location, vid) if vid else None
+    if v is not None and v.level != "village":          # officials sit on a block/district
+        child = db.query(Location).filter(Location.parent_id == v.id).first()
+        v = child or v
+    rows = db.query(HealthCentre).all()
+    out = []
+    for h in rows:
+        d = None
+        if v is not None and v.lat is not None and h.lat is not None:
+            d = round(intel.haversine_km(v.lat, v.lon, h.lat, h.lon), 1)
+        out.append({"id": h.id, "name": h.name, "name_local": h.name_local,
+                    "kind": h.kind, "phone": h.phone or "1962",
+                    "timings": h.timings, "is_24x7": bool(h.is_24x7),
+                    "services": (h.services or "").split(","),
+                    "lat": h.lat, "lon": h.lon, "distance_km": d,
+                    "maps": f"https://www.google.com/maps/search/?api=1&query={h.lat},{h.lon}"
+                            if h.lat is not None else None})
+    out.sort(key=lambda r: (r["distance_km"] is None, r["distance_km"] or 0))
+    return {"village": v.name if v is not None else None,
+            "helpline": "1962", "centres": out[:limit]}
+
+
+# ------------------------------------------- outbreak awareness for farmers --
+@app.get("/api/my/outbreak")
+def my_outbreak(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Is the farmer's own village inside a live outbreak zone?
+
+    Every farmer in the zone must be warned, not only the one who reported --
+    this is what turns detection into village-wide awareness.
+    """
+    v = db.get(Location, user.location_id) if user.location_id else None
+    if v is None:
+        return {"in_zone": False}
+    kb = intel.load_kb()
+    for ob in db.query(Outbreak).filter(Outbreak.status == "ACTIVE").all():
+        try:
+            zone = json.loads(ob.zone_village_ids or "[]")
+        except ValueError:
+            zone = []
+        centre = db.get(Location, ob.center_village_id)
+        dist = None
+        if centre is not None and v.lat is not None and centre.lat is not None:
+            dist = round(intel.haversine_km(v.lat, v.lon, centre.lat, centre.lon), 1)
+        inside = v.id in zone or (dist is not None and dist <= (ob.radius_km or 0))
+        if not inside:
+            continue
+        d = kb["diseases"].get(ob.suspected, {})
+        lang = user.lang or "hi"
+        return {
+            "in_zone": True, "outbreak_id": ob.id,
+            "disease_key": ob.suspected,
+            "disease": (d.get("name", {}) or {}).get(lang)
+                       or (d.get("name", {}) or {}).get("en") or ob.suspected,
+            "zoonotic": bool(ob.zoonotic),
+            "centre": centre.name if centre is not None else None,
+            "distance_km": dist, "radius_km": ob.radius_km,
+            "cases_7d": ob.cases_7d, "detected_at": ob.detected_at.isoformat(),
+            "advice": (d.get("action", {}) or {}).get(lang)
+                      or (d.get("action", {}) or {}).get("en"),
+            "is_my_village": v.id == ob.center_village_id,
+        }
+    return {"in_zone": False}
+
+
+# -------------------------------------------- live farmer registration ------
+LIVE_TARGET = int(os.environ.get("PASHU_LIVE_TARGET", "20"))
+
+
+class RegisterIn(BaseModel):
+    phone: str
+    name: str
+    village_id: Optional[int] = None
+    lang: str = "hi"
+
+
+@app.post("/api/auth/register")
+def register_farmer(body: RegisterIn, db: Session = Depends(get_db)):
+    """Self sign-up for a farmer, so people can be enrolled on the spot.
+
+    Returns a token as well, so registering and signing in is one step at a
+    desk or on stage.
+    """
+    phone = "".join(ch for ch in body.phone if ch.isdigit())[-10:]
+    name = (body.name or "").strip()
+    if len(phone) != 10:
+        raise HTTPException(400, "Enter a 10-digit mobile number")
+    if len(name) < 2:
+        raise HTTPException(400, "Enter the farmer's name")
+    existing = db.query(User).filter(User.phone == phone).first()
+    if existing:
+        return {"already": True, "token": make_token(existing.id),
+                "user": {"id": existing.id, "name": existing.name,
+                         "role": existing.role, "lang": existing.lang}}
+    v = db.get(Location, body.village_id) if body.village_id else None
+    if v is None or v.level != "village":
+        v = db.query(Location).filter(Location.level == "village").first()
+    u = User(phone=phone, name=name, role="farmer", location_id=v.id,
+             lang=body.lang if body.lang in ("hi", "mr", "en") else "hi")
+    db.add(u); db.flush()
+    db.add(Farmer(user_id=u.id, village_id=v.id))
+    audit(db, u.id, "register", f"{name} · {v.name}")
+    db.commit()
+    return {"already": False, "token": make_token(u.id),
+            "user": {"id": u.id, "name": u.name, "role": "farmer",
+                     "lang": u.lang, "location": v.name, "location_id": v.id}}
+
+
+@app.get("/api/live/registrations")
+def live_registrations(limit: int = 25, db: Session = Depends(get_db)):
+    """The on-stage enrolment wall: who signed up, just now, and from where."""
+    rows = (db.query(AuditLog).filter(AuditLog.action == "register")
+              .order_by(AuditLog.at.desc()).limit(limit).all())
+    recent = []
+    for r in rows:
+        u = db.get(User, r.user_id)
+        if u is None:
+            continue
+        loc = db.get(Location, u.location_id) if u.location_id else None
+        fm = db.query(Farmer).filter(Farmer.user_id == u.id).first()
+        n_animals = (db.query(func.count(Animal.id))
+                       .filter(Animal.farmer_id == fm.id).scalar() if fm else 0)
+        recent.append({"name": u.name, "phone": "••••" + (u.phone or "")[-4:],
+                       "village": loc.name if loc else None,
+                       "village_local": loc.name_mr if loc else None,
+                       "animals": n_animals, "at": r.at.isoformat()})
+    total = db.query(func.count(AuditLog.id)).filter(AuditLog.action == "register").scalar() or 0
+    return {"count": total, "target": LIVE_TARGET, "recent": recent}
 
 
 # ----------------------------------------------------------------- frontend --

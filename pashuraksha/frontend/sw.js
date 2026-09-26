@@ -2,7 +2,7 @@
    Strategy: network-first for same-origin shell assets (always fresh during
    demos), falling back to cache when offline. API calls: network-only — the
    report queue in api.js handles offline writes. */
-const CACHE = 'pashuraksha-v8';
+const CACHE = 'pashuraksha-v9';
 const SHELL = ['/', '/index.html', '/farmer.html', '/vet.html', '/gov.html',
                '/ivr.html', '/passport.html', '/sitrep.html', '/css/app.css', '/js/api.js',
                '/js/i18n.js', '/js/assistant.js', '/js/farmer.js', '/js/vet.js', '/js/gov.js',

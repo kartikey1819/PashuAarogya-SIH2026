@@ -14,11 +14,12 @@ Pre-seeded workflow artefacts: samples across the whole chain
 closed cases — so vet & lab screens are populated before the demo starts.
 `advance_outbreak_day()` injects one more day of spread on demand.
 """
+import os
 import random
 from datetime import datetime, date, timedelta
 
 from models import (Location, User, Farmer, Animal, Case, Vaccination,
-                    Treatment, Sample, Alert, Claim, Camp)
+                    Treatment, Sample, Alert, Claim, Camp, HealthCentre)
 from engine import triage, haversine_km
 
 rng = random.Random(2026)
@@ -51,6 +52,48 @@ GEO = {
         "Barshi":      {"mr": "बार्शी",     "lat": 18.23, "lon": 75.69},
         "Pandharpur":  {"mr": "पंढरपूर",  "lat": 17.68, "lon": 75.33},
     }},
+}
+
+# ---------------------------------------------------- second region: M.P. ----
+# Indore district (Madhya Pradesh). The problem statement is Maharashtra's, so
+# Maharashtra stays the primary dataset and keeps every outbreak storyline.
+# Indore is seeded alongside it so the team can demo — and register real farmers
+# live — in the geography they actually stand in. Set PASHU_REGION=mh to drop it.
+#
+# Tehsil names and coordinates are real; village names are illustrative and must
+# be replaced with LGD-verified names before any real deployment.
+GEO_MP = {
+    "Indore": {"mr": "इंदौर", "lat": 22.72, "lon": 75.86, "blocks": {
+        "Depalpur": {"mr": "देपालपुर", "lat": 22.85, "lon": 75.54},
+        "Sanwer":   {"mr": "सांवेर",   "lat": 22.97, "lon": 75.83},
+        "Mhow":     {"mr": "महू",      "lat": 22.55, "lon": 75.76},
+        "Hatod":    {"mr": "हातोद",    "lat": 22.78, "lon": 75.71},
+        "Rau":      {"mr": "राऊ",      "lat": 22.63, "lon": 75.80},
+    }},
+}
+
+MP_VILLAGE_NAMES = [
+    "Betma", "Gautampura", "Kampel", "Harsola", "Palia", "Simrol", "Manpur",
+    "Machal", "Kshipra", "Chandravatiganj", "Tillore Khurd", "Rangwasa",
+    "Bicholi Mardana", "Arandia", "Jamli", "Nihalpur Mundi", "Ajnod",
+    "Bagoda", "Kalaria", "Silotiya",
+]
+
+MP_FARMER_NAMES = [
+    "Ramesh Patidar", "Mukesh Yadav", "Kailash Chouhan", "Sunita Verma",
+    "Dinesh Solanki", "Radheshyam Sharma", "Mangilal Patel", "Sitabai Thakur",
+    "Jagdish Rathore", "Pooja Malviya", "Narendra Gurjar", "Shivnarayan Dangi",
+    "Anita Bhilala", "Om Prakash Joshi", "Lakhan Sisodiya", "Devilal Mandloi",
+]
+
+# Malwa-region breeds — Malvi and Nimari cattle, Bhadawari buffalo and
+# Kadaknath poultry are all native to Madhya Pradesh.
+BREEDS_MP = {
+    "cattle": ["Malvi", "Nimari", "Gir", "Sahiwal", "HF cross"],
+    "buffalo": ["Bhadawari", "Murrah", "Nagpuri"],
+    "goat": ["Jamunapari", "Barbari", "Sirohi"],
+    "sheep": ["Malpura", "Deccani"],
+    "poultry": ["Kadaknath", "Desi"],
 }
 
 VILLAGE_NAMES = [
@@ -94,6 +137,64 @@ def _pick_species():
     return "cattle"
 
 
+def _report_lag_days(when: datetime) -> int:
+    """How long the farmer waited before reporting, in the synthetic history.
+
+    Real under-reporting looks like this: before a surveillance channel exists a
+    farmer waits for the animal to get worse, and once reporting is easy (and
+    pays, through the compensation loop) the wait collapses. Older cases
+    therefore carry a 3-7 day lag and recent ones 0-2, so the "reduced reporting
+    time" KPI has a real trend to show instead of a flat line.
+
+    This is simulated demo data and must be presented as such.
+    """
+    age_days = (datetime.utcnow() - when).days
+    if age_days > 300:
+        return rng.randint(4, 8)
+    if age_days > 150:
+        return rng.randint(3, 6)
+    if age_days > 45:
+        return rng.randint(1, 4)
+    return rng.randint(0, 2)
+
+
+def _seed_health_centres(db):
+    """The places a farmer can actually go to, on the real institution ladder:
+    village/block dispensary -> district polyclinic -> district lab, plus the
+    1962 mobile units that come to the door.
+
+    No phone number is invented. Everything routes through 1962, the genuine
+    state helpline; `phone` is left for a department to fill from its directory.
+    """
+    for dist in db.query(Location).filter(Location.level == "district").all():
+        db.add(HealthCentre(
+            name=f"Veterinary Polyclinic, {dist.name}",
+            name_local=f"पशु चिकित्सा पॉलीक्लिनिक, {dist.name_mr or dist.name}",
+            kind="polyclinic", block_id=dist.id, lat=dist.lat, lon=dist.lon,
+            timings="09:00-17:00", is_24x7=False,
+            services="treatment,surgery,referral,vaccination,ai"))
+        db.add(HealthCentre(
+            name=f"District Disease Investigation Lab, {dist.name}",
+            name_local=f"जिला रोग अन्वेषण प्रयोगशाला, {dist.name_mr or dist.name}",
+            kind="lab", block_id=dist.id, lat=dist.lat, lon=dist.lon,
+            timings="10:00-17:00", services="sample_testing,post_mortem"))
+        db.add(HealthCentre(
+            name=f"1962 Mobile Veterinary Unit — {dist.name}",
+            name_local=f"१९६२ फिरता पशुवैद्यकीय दवाखाना — {dist.name_mr or dist.name}",
+            kind="mvu", block_id=dist.id, lat=dist.lat, lon=dist.lon,
+            timings="24x7 on call", is_24x7=True,
+            services="doorstep_treatment,emergency,sample_collection"))
+
+    for blk in db.query(Location).filter(Location.level == "block").all():
+        db.add(HealthCentre(
+            name=f"Veterinary Dispensary, {blk.name}",
+            name_local=f"पशु चिकित्सालय, {blk.name_mr or blk.name}",
+            kind="dispensary", block_id=blk.id, lat=blk.lat, lon=blk.lon,
+            timings="09:00-13:00, 14:00-17:00",
+            services="treatment,vaccination,deworming,ai"))
+    db.flush()
+
+
 def seed_all(db):
     if db.query(Location).count():
         return False
@@ -117,6 +218,29 @@ def seed_all(db):
                              lat=b["lat"] + rng.uniform(-0.085, 0.085),
                              lon=b["lon"] + rng.uniform(-0.085, 0.085))
                 db.add(v); villages.append(v); by_block[bname].append(v)
+
+    # second region (Indore, M.P.) — same shape, its own village/breed pools
+    mp_village_ids = set()
+    if os.environ.get("PASHU_REGION", "both").lower() != "mh":
+        mp_vname = iter(MP_VILLAGE_NAMES * 2)
+        for dname, d in GEO_MP.items():
+            dist = Location(name=dname, name_mr=d["mr"], level="district",
+                            lgd_code=str(lgd := lgd + 1), lat=d["lat"], lon=d["lon"])
+            db.add(dist); db.flush()
+            for bname, b in d["blocks"].items():
+                blk = Location(name=bname, name_mr=b["mr"], level="block",
+                               lgd_code=str(lgd := lgd + 1), parent_id=dist.id,
+                               lat=b["lat"], lon=b["lon"])
+                db.add(blk); db.flush()
+                by_block[bname] = []
+                for i in range(4):
+                    v = Location(name=next(mp_vname), level="village",
+                                 lgd_code=str(lgd := lgd + 1), parent_id=blk.id,
+                                 lat=b["lat"] + rng.uniform(-0.07, 0.07),
+                                 lon=b["lon"] + rng.uniform(-0.07, 0.07))
+                    db.add(v); db.flush()
+                    villages.append(v); by_block[bname].append(v)
+                    mp_village_ids.add(v.id)
     db.flush()
 
     # ------------------------------------------------------------- users -----
@@ -131,6 +255,13 @@ def seed_all(db):
         ("9000000006", "D.V.O. Ahmednagar", "district", ahm.id, "en"),
         ("9000000007", "State Admin", "state", None, "en"),
     ]
+    ind_v = next((v for v in villages if v.id in mp_village_ids), None)
+    if ind_v is not None:
+        ind_d = db.get(Location, db.get(Location, ind_v.parent_id).parent_id)
+        demo_users += [
+            ("9000000011", "Ramesh Patidar", "farmer", ind_v.id, "hi"),
+            ("9000000012", "D.V.O. Indore", "district", ind_d.id, "en"),
+        ]
     for phone, name, role, loc, lang in demo_users:
         db.add(User(phone=phone, name=name, role=role, location_id=loc, lang=lang))
     db.flush()
@@ -143,16 +274,18 @@ def seed_all(db):
             if idx == 0 and j == 0:
                 u = demo_farmer_user
             else:
+                names = MP_FARMER_NAMES if v.id in mp_village_ids else FARMER_NAMES
                 u = User(phone=f"98{rng.randint(10000000, 99999999)}",
-                         name=rng.choice(FARMER_NAMES), role="farmer",
+                         name=rng.choice(names), role="farmer",
                          location_id=v.id, lang="hi")
                 db.add(u); db.flush()
             fm = Farmer(user_id=u.id, village_id=v.id)
             db.add(fm); db.flush()
             for _ in range(rng.randint(2, 6)):
                 sp = _pick_species()
+                breeds = BREEDS_MP if v.id in mp_village_ids else BREEDS
                 db.add(Animal(tag_id=f"IN{tag_seq}", species=sp,
-                              breed=rng.choice(BREEDS[sp]),
+                              breed=rng.choice(breeds[sp]),
                               sex=rng.choice(["F", "F", "F", "M"]),
                               age_months=rng.randint(8, 110),
                               farmer_id=fm.id, village_id=v.id))
@@ -174,6 +307,9 @@ def seed_all(db):
                                    given_on=given, due_on=given + timedelta(days=365),
                                    campaign="LHDCP 2026"))
     db.flush()
+
+    # -------------------------------------------- veterinary institutions ----
+    _seed_health_centres(db)
 
     # ------------------------------------------------------- storylines ------
     now = datetime.utcnow()
@@ -354,7 +490,8 @@ def _mk_case(db, village, species, symptoms, dead, when, channel=None):
     c = Case(village_id=village.id, farmer_id=fm.id if fm else None,
              species=species, breed=breed, symptoms=",".join(symptoms),
              affected_count=rng.randint(1, 4), dead_count=dead,
-             onset_date=when.date(), reported_at=when,
+             onset_date=(when - timedelta(days=_report_lag_days(when))).date(),
+             reported_at=when,
              channel=channel or rng.choice(["app", "app", "field", "ivr", "sms"]),
              lat=village.lat + rng.uniform(-0.012, 0.012),
              lon=village.lon + rng.uniform(-0.012, 0.012),

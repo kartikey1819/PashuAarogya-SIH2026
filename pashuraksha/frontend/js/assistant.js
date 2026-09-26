@@ -227,3 +227,240 @@
   A.kw = (ql, words) => words.some(w => ql.includes(w.toLowerCase()));
   window.PashuMitra = A;
 })();
+
+/* ============================ GUIDED VOICE INTERVIEW ========================
+   A farmer rarely volunteers a full clinical picture. Left to an open mic they
+   say "my cow is sick" and stop. So पशु मित्र runs the consultation the way a
+   vet would on the phone: one short question at a time, in the farmer's own
+   language, about things they can actually observe — is the milk down, is she
+   eating, is the body hot, any lumps.
+
+   Each answer maps to a symptom code the triage engine already understands, so
+   a spoken conversation produces exactly the same structured case a tapped form
+   does — including when the illness started, which is what makes reporting
+   delay measurable.
+   ========================================================================== */
+(function () {
+  const A = window.PashuMitra;
+  if (!A) return;
+  const lang = () => (window.LANG || localStorage.getItem('pr_lang') || 'hi');
+  const L = (hi, mr, en) => (lang() === 'mr' ? mr : lang() === 'en' ? en : hi);
+
+  /* ------------------------------------------------------------ parsing --- */
+  const tokens = q => String(q).toLowerCase().replace(/[।,.!?]/g, ' ').split(/\s+/).filter(Boolean);
+  const YES = ['हाँ', 'हां', 'हा', 'होय', 'जी', 'है', 'हैं', 'आहे', 'हो', 'yes', 'yeah', 'yep', 'y', 'ok'];
+  const NO = ['नहीं', 'नही', 'ना', 'नाही', 'नको', 'no', 'nope', 'n'];
+  const NUMW = {
+    'एक': 1, 'दो': 2, 'दोन': 2, 'तीन': 3, 'चार': 4, 'पांच': 5, 'पाँच': 5, 'पाच': 5,
+    'छह': 6, 'सहा': 6, 'सात': 7, 'आठ': 8, 'नौ': 9, 'नऊ': 9, 'दस': 10, 'दहा': 10,
+    'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7,
+    'eight': 8, 'nine': 9, 'ten': 10, 'कोई': 0, 'कोणी': 0, 'none': 0, 'zero': 0,
+  };
+
+  // "ना" is a whole word for "no" but also sits inside जानवर, so match tokens,
+  // never substrings. A wrong yes/no here would quietly corrupt the case.
+  const said = (q, list) => tokens(q).some(w => list.includes(w));
+  const yesNo = q => (said(q, NO) ? false : said(q, YES) ? true : null);
+
+  function num(q) {
+    const m = String(q).match(/\d+/);
+    if (m) return parseInt(m[0], 10);
+    for (const w of tokens(q)) if (w in NUMW) return NUMW[w];
+    return null;
+  }
+
+  function onsetDays(q) {
+    const s = String(q).toLowerCase();
+    if (/आज|today/.test(s)) return 0;
+    if (/कल|काल|yesterday/.test(s)) return 1;
+    if (/परसों|परवा/.test(s)) return 2;
+    const n = num(q);
+    if (n == null) return null;
+    if (/हफ्ता|हफ़्ता|सप्ताह|आठवड|week/.test(s)) return n * 7;
+    if (/महीन|महिन|month/.test(s)) return n * 30;
+    return n;                                   // a bare number means days
+  }
+
+  const SPK = {
+    cattle: ['गाय', 'गाई', 'cow', 'cattle', 'बैल'], buffalo: ['भैंस', 'भैस', 'म्हैस', 'buffalo'],
+    goat: ['बकरी', 'शेळी', 'goat'], sheep: ['भेड़', 'भेड', 'मेंढी', 'sheep'],
+    poultry: ['मुर्गी', 'मुर्गा', 'कोंबडी', 'poultry', 'chicken'],
+  };
+  const species = q => Object.keys(SPK).find(k => SPK[k].some(w => String(q).toLowerCase().includes(w)));
+
+  /* ---------------------------------------------------------- questions --- */
+  // `sym` is the symptom code added when the answer is yes; `symNo` when it is
+  // no — a cow that has stopped eating is the classic "no" that matters.
+  const Q = [
+    {
+      id: 'species', type: 'species',
+      ask: () => L('कौन सा पशु बीमार है? गाय, भैंस, बकरी, भेड़ या मुर्गी?',
+        'कोणते जनावर आजारी आहे? गाय, म्हैस, शेळी, मेंढी की कोंबडी?',
+        'Which animal is ill — cow, buffalo, goat, sheep or poultry?'),
+      chips: () => [L('गाय', 'गाय', 'Cow'), L('भैंस', 'म्हैस', 'Buffalo'),
+        L('बकरी', 'शेळी', 'Goat'), L('मुर्गी', 'कोंबडी', 'Poultry')],
+    },
+    {
+      id: 'onset', type: 'onset',
+      ask: () => L('कब से बीमार है? जैसे — आज, कल, या तीन दिन से।',
+        'किती दिवसांपासून आजारी आहे? जसे — आज, काल, किंवा तीन दिवस.',
+        'How long has it been ill? Say today, yesterday, or three days.'),
+      chips: () => [L('आज से', 'आजपासून', 'Today'), L('कल से', 'काल पासून', 'Yesterday'),
+        L('तीन दिन', 'तीन दिवस', '3 days'), L('एक हफ्ता', 'एक आठवडा', 'A week')],
+    },
+    {
+      id: 'milk', type: 'yesno', sym: 'low_milk',
+      skip: d => d.species === 'poultry',
+      ask: () => L('क्या दूध कम हो गया है?', 'दूध कमी झाले आहे का?', 'Has the milk gone down?'),
+    },
+    {
+      id: 'egg', type: 'yesno', sym: 'egg_drop',
+      skip: d => d.species !== 'poultry',
+      ask: () => L('क्या अंडे कम हो गए हैं?', 'अंडी कमी झाली आहेत का?', 'Have eggs dropped?'),
+    },
+    {
+      id: 'eating', type: 'yesno', symNo: 'anorexia',
+      ask: () => L('क्या पशु चारा खा रहा है?', 'जनावर चारा खात आहे का?', 'Is the animal eating?'),
+    },
+    {
+      id: 'fever', type: 'yesno', sym: 'fever',
+      ask: () => L('शरीर गरम लग रहा है, बुखार है?', 'अंग गरम आहे का, ताप आहे?',
+        'Does the body feel hot — any fever?'),
+    },
+    {
+      id: 'skin', type: 'yesno', sym: 'nodules',
+      ask: () => L('शरीर पर गांठें या घाव दिख रहे हैं?', 'अंगावर गाठी किंवा जखमा दिसतात का?',
+        'Any lumps or sores on the body?'),
+    },
+    {
+      id: 'mouth', type: 'yesno', sym: 'oral_lesions',
+      ask: () => L('मुँह या खुर में छाले हैं, या मुँह से लार गिर रही है?',
+        'तोंडात किंवा खुरात फोड आहेत, किंवा तोंडातून लाळ गळते का?',
+        'Blisters in the mouth or hoof, or drooling?'),
+    },
+    {
+      id: 'count', type: 'number',
+      ask: () => L('कितने पशु बीमार हैं?', 'किती जनावरे आजारी आहेत?', 'How many animals are ill?'),
+      chips: () => ['1', '2', '3', '5'],
+    },
+    {
+      id: 'dead', type: 'number',
+      ask: () => L('क्या कोई पशु मरा है? कितने?', 'एखादे जनावर मेले आहे का? किती?',
+        'Has any animal died? How many?'),
+      chips: () => [L('कोई नहीं', 'कोणी नाही', 'None'), '1', '2'],
+    },
+  ];
+
+  /* ------------------------------------------------------------- engine --- */
+  A.startInterview = function (seed) {
+    this.interview = {
+      i: 0,
+      data: Object.assign({
+        species: null, symptoms: [], onset_days_ago: null,
+        affected_count: 1, dead_count: 0,
+      }, seed || {}),
+    };
+    this.open(false);
+    this.reply(L('ठीक है, कुछ छोटे सवाल पूछता हूँ। आप बोलकर या टैप करके जवाब दें।',
+      'ठीक आहे, काही छोटे प्रश्न विचारतो. बोलून किंवा टॅप करून उत्तर द्या.',
+      'Alright, a few short questions. Answer by voice or tap.'))
+      .then(() => this.nextQuestion());
+  };
+
+  A.nextQuestion = function () {
+    const iv = this.interview;
+    if (!iv) return;
+    while (iv.i < Q.length && Q[iv.i].skip && Q[iv.i].skip(iv.data)) iv.i++;
+    if (iv.i >= Q.length) return this.finishInterview();
+    const q = Q[iv.i];
+    const chips = (q.chips ? q.chips() : [L('हाँ', 'होय', 'Yes'), L('नहीं', 'नाही', 'No')])
+      .map(c => ({ label: c, close: false, run: () => this.handle(c) }));
+    const step = `<div style="font-size:10.5px;opacity:.6;margin-bottom:3px">${iv.i + 1} / ${Q.length}</div>`;
+    this.reply(step + q.ask(), chips, q.ask()).then(() => {
+      // hands-free: start listening again the moment the question finishes
+      if (window.SpeechRecognition || window.webkitSpeechRecognition) {
+        setTimeout(() => { if (this.interview) this.listen(); }, 250);
+      }
+    });
+  };
+
+  A.interviewAnswer = function (raw) {
+    const iv = this.interview;
+    const q = Q[iv.i], d = iv.data;
+    let ok = true;
+    if (q.type === 'species') {
+      const sp = species(raw);
+      if (sp) d.species = sp; else ok = false;
+    } else if (q.type === 'onset') {
+      const days = onsetDays(raw);
+      if (days != null) d.onset_days_ago = days; else ok = false;
+    } else if (q.type === 'number') {
+      const v = num(raw);
+      if (v == null) ok = false;
+      else if (q.id === 'count') d.affected_count = Math.max(1, v);
+      else d.dead_count = Math.max(0, v);
+    } else {                                   // yes / no
+      const v = yesNo(raw);
+      if (v == null) ok = false;
+      else {
+        const code = v ? q.sym : q.symNo;
+        if (code && !d.symptoms.includes(code)) d.symptoms.push(code);
+      }
+    }
+    if (!ok) {                                 // not understood — ask again
+      return this.reply(L('माफ़ कीजिए, समझ नहीं आया। फिर से बताइए।',
+        'माफ करा, समजले नाही. पुन्हा सांगा.',
+        "Sorry, I didn't catch that. Please say it again."))
+        .then(() => this.nextQuestion());
+    }
+    iv.i++;
+    this.nextQuestion();
+  };
+
+  A.finishInterview = function () {
+    const d = this.interview.data;
+    this.interview = null;
+    const SPN = {
+      cattle: L('गाय', 'गाय', 'Cow'), buffalo: L('भैंस', 'म्हैस', 'Buffalo'),
+      goat: L('बकरी', 'शेळी', 'Goat'), sheep: L('भेड़', 'मेंढी', 'Sheep'),
+      poultry: L('मुर्गी', 'कोंबडी', 'Poultry'),
+    };
+    // KB is declared with let in farmer.js, so it is NOT on window — reach it
+    // by identifier, guarded for the pages that never load a knowledge base.
+    const kb = (typeof KB !== 'undefined' && KB && KB.symptoms) || {};
+    const symNames = d.symptoms.map(c => (kb[c] && (kb[c][lang()] || kb[c].en)) || c);
+    const since = d.onset_days_ago === 0
+      ? L('आज से', 'आजपासून', 'since today')
+      : L(`${d.onset_days_ago} दिन से`, `${d.onset_days_ago} दिवसांपासून`,
+          `for ${d.onset_days_ago} days`);
+    const summary = L(
+      `समझ गया — <b>${SPN[d.species] || ''}</b>, ${since}, ${d.affected_count} पशु बीमार`
+        + (d.dead_count ? `, ${d.dead_count} मरे` : '')
+        + (symNames.length ? `।<br>लक्षण: <b>${symNames.join(', ')}</b>` : '।'),
+      `समजले — <b>${SPN[d.species] || ''}</b>, ${since}, ${d.affected_count} जनावरे आजारी`
+        + (d.dead_count ? `, ${d.dead_count} मेली` : '')
+        + (symNames.length ? `.<br>लक्षणे: <b>${symNames.join(', ')}</b>` : '.'),
+      `Got it — <b>${SPN[d.species] || ''}</b>, ${since}, ${d.affected_count} ill`
+        + (d.dead_count ? `, ${d.dead_count} dead` : '')
+        + (symNames.length ? `.<br>Signs: <b>${symNames.join(', ')}</b>` : '.'));
+    const confirm = L('क्या मैं यह तक्रार भेज दूँ?', 'ही तक्रार पाठवू का?',
+      'Shall I send this report?');
+    this.reply(summary + '<br><br>' + confirm, [
+      {
+        label: L('✅ हाँ, भेजें', '✅ होय, पाठवा', '✅ Yes, send'),
+        run: () => window.PR && PR.submitFromVoice(d),
+      },
+      {
+        label: L('✏️ पहले देखूँ', '✏️ आधी पाहतो', '✏️ Review first'),
+        run: () => window.PR && PR.fillReport(d),
+      },
+    ], summary.replace(/<[^>]+>/g, '') + '. ' + confirm);
+  };
+
+  /* An interview in progress owns every answer, ahead of skills and the LLM. */
+  const origHandle = A.handle.bind(A);
+  A.handle = async function (q) {
+    if (this.interview) { this.say(q, 'u'); return this.interviewAnswer(q); }
+    return origHandle(q);
+  };
+})();

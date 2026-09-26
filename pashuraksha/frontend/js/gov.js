@@ -32,7 +32,8 @@ async function init() {
   renderNav(); render(); initGovAssistant();
   // live sync — any officer's action anywhere refreshes this dashboard
   Sync.start(d => {
-    if (section === 'overview' && (d.cases || d.outbreaks || d.alerts || d.samples_result)) refreshOverview();
+    if (section === 'overview' && (d.cases || d.outbreaks || d.alerts || d.samples_result
+                                   || d.registrations)) refreshOverview();
     else if (section === 'tasks' && (d.tasks_open || d.tasks_done)) tasks();
     else if (section === 'claims' && d.claims !== undefined) claims();
     else if (section === 'campaigns' && (d.camps || d.vaccinations)) campaigns();
@@ -122,6 +123,7 @@ async function overview() {
       </div>
     </div>
     <div class="kpis" id="kpis"></div>
+    <div id="liveReg"></div>
     <div class="grid two-col" style="grid-template-columns:1.55fr 1fr;margin-top:16px">
       <div>
         <div class="card" style="padding:12px">
@@ -194,6 +196,7 @@ async function overview() {
 
 async function refreshOverview() {
   refreshKPIs(); refreshMap(); refreshClusters(); refreshAlerts(); refreshTrends();
+  refreshLiveReg();
 }
 
 async function refreshKPIs() {
@@ -212,7 +215,12 @@ async function refreshKPIs() {
     <div class="kpi ${s.vaccination_coverage < .6 ? 'warn' : 'ok'}">
       <div class="v">${Math.round(s.vaccination_coverage * 100)}%</div>
       <div class="l">Vaccination coverage</div></div>
-    <div class="kpi"><div class="v">${s.pending_lab}</div><div class="l">Samples in lab</div></div>`;
+    <div class="kpi"><div class="v">${s.pending_lab}</div><div class="l">Samples in lab</div></div>
+    <div class="kpi ${s.median_report_lag_h == null ? '' : (s.median_report_lag_h <= 24 ? 'ok' : 'warn')}">
+      <div class="v">${s.median_report_lag_h == null ? '—'
+        : (s.median_report_lag_h >= 48 ? (s.median_report_lag_h / 24).toFixed(1) + 'd'
+                                       : s.median_report_lag_h + 'h')}</div>
+      <div class="l">Median reporting delay<br><span style="opacity:.7">onset → report, 30 days</span></div></div>`;
 }
 
 async function refreshMap() {
@@ -874,4 +882,65 @@ async function renderDbHealth() {
           ${h.recent_writes.map(r => `<div style="padding:2px 0">${fmtDT(r.at)} · <b>${esc(r.action)}</b> ${esc(r.detail || '')}</div>`).join('')}
         </div></div>`;
   } catch (e) { box.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; }
+}
+
+
+/* ------------------------- LIVE FARMER ENROLMENT WALL ----------------------
+   During the demo, farmers (or judges) register themselves on a phone. This
+   panel is the proof it actually reached the database: a counter against the
+   target, and each new name appearing within seconds, with the village and the
+   herd size. It stays hidden until the first live registration exists, so it
+   never shows an empty frame on an ordinary day. */
+async function refreshLiveReg() {
+  const slot = document.getElementById('liveReg');
+  if (!slot) return;
+  let d;
+  try { d = await API.get('/api/live/registrations'); } catch (e) { return; }
+  if (!d || !d.count) { slot.innerHTML = ''; return; }
+
+  const pct = Math.min(100, Math.round((d.count / (d.target || 20)) * 100));
+  const done = d.count >= (d.target || 20);
+  slot.innerHTML = `
+    <div class="card" style="margin-top:14px;border-left:4px solid var(--green)">
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <div>
+          <div style="font-family:var(--f-d);font-size:15px;font-weight:700">
+            🟢 Live farmer enrolment
+            <span class="mr" style="font-weight:400">· थेट नोंदणी</span>
+          </div>
+          <div class="muted" style="font-size:12px">Registered on stage, saved to the database</div>
+        </div>
+        <div style="margin-left:auto;text-align:right">
+          <div style="font-family:var(--f-d);font-size:26px;font-weight:800;
+            color:${done ? 'var(--green)' : 'var(--saffron)'};line-height:1">
+            ${d.count}<span style="font-size:15px;opacity:.6"> / ${d.target}</span></div>
+          <div class="muted" style="font-size:11px">${done ? 'target reached ✓' : 'farmers'}</div>
+        </div>
+      </div>
+      <div style="height:6px;background:var(--surface-2);border-radius:3px;margin:10px 0 12px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;border-radius:3px;
+          background:${done ? 'var(--green)' : 'var(--saffron)'};
+          transition:width 600ms cubic-bezier(.23,1,.32,1)"></div>
+      </div>
+      <div id="liveRegRows" style="display:flex;flex-wrap:wrap;gap:7px"></div>
+    </div>`;
+
+  const rows = document.getElementById('liveRegRows');
+  (d.recent || []).slice(0, 12).forEach(r => {
+    const chip = document.createElement('span');
+    chip.className = 'chip ok';
+    chip.style.cssText = 'font-size:12px;padding:5px 10px';
+    chip.innerHTML = `<b>${esc(r.name)}</b> · ${esc(r.village || '')}`
+      + (r.animals ? ` · 🐄 ${r.animals}` : '')
+      + ` <span style="opacity:.6">${timeAgo(r.at)}</span>`;
+    rows.appendChild(chip);
+  });
+}
+
+function timeAgo(iso) {
+  const secs = Math.max(0, (Date.now() - new Date(iso + 'Z').getTime()) / 1000);
+  if (secs < 60) return 'just now';
+  if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+  if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
+  return Math.floor(secs / 86400) + 'd ago';
 }

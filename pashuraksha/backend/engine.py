@@ -231,14 +231,31 @@ def _emit_outbreak_alerts(db, ob, center, suspected, zoonotic, kb):
                            f"Parallel notice to district health authority (IDSP) "
                            f"advised for human surveillance in the same zone."),
                      village_id=center.id, target_role="health"))
-    # farmer advisory in Marathi for zone villages
+    # Farmer advisory -- to EVERY village in the zone, not just the epicentre.
+    # Warning only the village that reported leaves the neighbours, who are the
+    # ones still able to prevent it, with no warning at all.
     act = kb["diseases"].get(suspected, {}).get("action", {})
-    for lang in ("mr", "hi", "en"):
-        if act.get(lang):
-            db.add(Alert(kind="advisory", severity="medium",
+    try:
+        zone_ids = json.loads(ob.zone_village_ids or "[]")
+    except ValueError:
+        zone_ids = []
+    if center.id not in zone_ids:
+        zone_ids.append(center.id)
+    for vid in zone_ids:
+        at_centre = (vid == center.id)
+        for lang in ("mr", "hi", "en"):
+            if not act.get(lang):
+                continue
+            near = {"mr": f"जवळच्या {center.name} भागात",
+                    "hi": f"पास के {center.name} क्षेत्र में",
+                    "en": f"near {center.name}"}[lang]
+            pre = {"mr": f"⚠ {dname} चा प्रादुर्भाव {near} आढळला आहे. ",
+                   "hi": f"⚠ {near} {dname} का प्रकोप मिला है। ",
+                   "en": f"⚠ A {dname} outbreak has been detected {near}. "}[lang]
+            db.add(Alert(kind="advisory", severity="high" if at_centre else "medium",
                          title=f"[{lang}] {dname}",
-                         body=act[lang], village_id=center.id,
-                         target_role="farmer", lang=lang))
+                         body=("" if at_centre else pre) + act[lang],
+                         village_id=vid, target_role="farmer", lang=lang))
     # action queue: every detected outbreak spawns owned, actionable tasks
     db.add(Task(kind="mvu_dispatch", assigned_role="vet", outbreak_id=ob.id,
                 village_id=center.id,

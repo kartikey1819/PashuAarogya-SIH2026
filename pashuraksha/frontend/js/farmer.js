@@ -6,7 +6,8 @@ let KB = null;
 const _hash = (location.hash || '').slice(1);
 let state = { tab: ['home', 'report', 'animals', 'services', 'alerts'].includes(_hash) ? _hash : 'home',
   step: 0,
-  report: { species: null, symptoms: [], affected_count: 1, dead_count: 0, photo: null } };
+  report: { species: null, symptoms: [], affected_count: 1, dead_count: 0, photo: null,
+             onset_days_ago: null } };
 
 const view = document.getElementById('view');
 const nav = document.getElementById('nav');
@@ -68,6 +69,35 @@ async function home() {
     view.lastChild.style.marginBottom = '12px';
   }
 
+  // Outbreak awareness — every farmer in the zone is warned, not only the one
+  // who reported. This is the difference between detection and containment.
+  API.get('/api/my/outbreak').then(o => {
+    if (!o || !o.in_zone) return;
+    const banner = el('div', 'card zone-alert');
+    banner.style.cssText = 'border-left:5px solid var(--red);background:#FFF4F2;margin-bottom:13px';
+    banner.innerHTML = `
+      <div style="display:flex;gap:11px;align-items:flex-start">
+        <span style="font-size:30px">${o.zoonotic ? '☣️' : '⚠️'}</span>
+        <div style="flex:1">
+          <b style="color:var(--red);font-size:16px">${t('zone_title')}</b>
+          <div style="font-size:14.5px;margin-top:3px">
+            <b>${esc(o.disease)}</b> — ${esc(o.centre || '')}
+            ${o.distance_km != null ? ` · ${o.distance_km} ${t('km_away')} ${t('zone_away')}` : ''}
+            ${o.is_my_village ? '' : ''}
+          </div>
+          <div class="muted" style="font-size:12px;margin-top:2px">
+            ${o.cases_7d} ${LANG === 'en' ? 'cases in 7 days' : 'नोंदी (७ दिवस)'} ·
+            ${t('zone_detected')}: ${esc((o.detected_at || '').slice(0, 10))}</div>
+          ${o.advice ? `<div style="margin-top:9px;padding:9px 11px;background:#fff;
+            border-radius:9px;font-size:13.5px"><b>${t('what_to_do')}:</b> ${esc(o.advice)}</div>` : ''}
+        </div></div>`;
+    const spk = el('button', 'btn outline sm', '🔊 ' + (LANG === 'en' ? 'Listen' : 'सुनें'));
+    spk.style.marginTop = '10px';
+    spk.onclick = () => window.speak && speak(`${t('zone_title')}. ${o.disease}. ${o.advice || ''}`);
+    banner.appendChild(spk);
+    view.insertBefore(banner, view.children[1] || null);
+  }).catch(() => {});
+
   // weather + camp strip
   const strip = el('div', '', '');
   strip.style.cssText = 'display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:13px';
@@ -96,6 +126,7 @@ async function home() {
 
   const btns = [
     ['report', '📢', t('report_sick'), 'report'],
+    ['__voice', '🎙️', t('interview_start'), ''],
     ['animals', '🐄', t('my_animals'), ''],
     ['services', '🤝', t('services') + ' — ' + t('claims') + ' · ' + t('camps'), ''],
     ['alerts', '🔔', t('advisories'), ''],
@@ -103,7 +134,10 @@ async function home() {
   btns.forEach(([tab, em, label, cls]) => {
     const b = el('button', 'bigbtn ' + cls, `<span class="ic">${em}</span><span>${label}</span>
       <span style="margin-left:auto;color:var(--muted)">›</span>`);
-    b.onclick = () => { state.tab = tab; if (tab === 'report') resetReport(); renderNav(); render(); };
+    b.onclick = () => {
+      if (tab === '__voice') { window.PashuMitra && PashuMitra.startInterview(); return; }
+      state.tab = tab; if (tab === 'report') resetReport(); renderNav(); render();
+    };
     view.appendChild(b);
   });
 
@@ -161,11 +195,12 @@ async function home() {
 /* ---------------------------------- REPORT -------------------------------- */
 function resetReport() {
   state.step = 0;
-  state.report = { species: null, symptoms: [], affected_count: 1, dead_count: 0, photo: null };
+  state.report = { species: null, symptoms: [], affected_count: 1, dead_count: 0, photo: null,
+                   onset_days_ago: null };
 }
 
 function report() {
-  const steps = [stepSpecies, stepSymptoms, stepCounts, stepConfirm];
+  const steps = [stepSpecies, stepSymptoms, stepOnset, stepCounts, stepConfirm];
   steps[state.step]();
 }
 
@@ -173,12 +208,19 @@ function stepHeader(txt) {
   view.innerHTML = `<div style="display:flex;align-items:center;gap:10px;margin:4px 0 16px">
     ${state.step > 0 ? `<button class="btn outline sm" onclick="state.step--;render()">‹ ${t('back')}</button>` : ''}
     <div style="font-family:var(--f-d);font-size:19px;font-weight:700">${txt}</div></div>
-    <div style="display:flex;gap:5px;margin-bottom:16px">${[0,1,2,3].map(i =>
+    <div style="display:flex;gap:5px;margin-bottom:16px">${[0,1,2,3,4].map(i =>
       `<div style="flex:1;height:5px;border-radius:3px;background:${i <= state.step ? 'var(--saffron)' : 'var(--hair)'}"></div>`).join('')}</div>`;
 }
 
 function stepSpecies() {
   stepHeader(t('which_animal'));
+  // The spoken route: पशु मित्र asks the questions instead of the farmer
+  // filling a form. Same structured case at the end.
+  const talk = el('button', 'btn outline',
+    `🎙️ ${t('interview_start')}`);
+  talk.style.cssText = 'width:100%;margin-bottom:14px;padding:13px;font-size:15px';
+  talk.onclick = () => window.PashuMitra && PashuMitra.startInterview();
+  view.appendChild(talk);
   const g = el('div', 'spgrid');
   SPECIES.forEach(s => {
     const b = el('button', 'spbtn' + (state.report.species === s.k ? ' on' : ''),
@@ -247,6 +289,36 @@ function setupVoice() {
   };
 }
 
+function stepOnset() {
+  stepHeader(t('onset_q'));
+  const opts = [['onset_today', 0, '☀️'], ['onset_yest', 1, '🌤'], ['onset_2_3', 3, '📅'],
+                ['onset_week', 7, '📆'], ['onset_more', 14, '🗓']];
+  const wrap = el('div', 'card', `<div class="muted" style="font-size:12.5px;margin-bottom:10px">
+    ${t('onset_why')}</div>`);
+  opts.forEach(([key, days, em]) => {
+    const on = state.report.onset_days_ago === days;
+    const b = el('button', 'bigbtn' + (on ? ' report' : ''),
+      `<span class="ic">${em}</span><span>${t(key)}</span>`);
+    b.style.marginBottom = '8px';
+    b.onclick = () => { state.report.onset_days_ago = days; state.step = 3; render(); };
+    wrap.appendChild(b);
+  });
+  // exact date, for anyone who remembers it
+  const today = new Date().toISOString().slice(0, 10);
+  const pick = el('div', '', `<label class="muted" style="font-size:12.5px">${t('onset_pick')}</label>
+    <input type="date" id="onsetDate" max="${today}" style="width:100%;padding:11px;
+      border:1.5px solid var(--hair);border-radius:10px;font-size:15px;font-family:inherit">`);
+  pick.style.marginTop = '10px';
+  wrap.appendChild(pick);
+  wrap.querySelector('#onsetDate').onchange = e => {
+    if (!e.target.value) return;
+    const days = Math.round((Date.now() - new Date(e.target.value)) / 86400000);
+    state.report.onset_days_ago = Math.max(0, days);
+    state.step = 3; render();
+  };
+  view.appendChild(wrap);
+}
+
 function stepCounts() {
   stepHeader(t('how_many'));
   const r = state.report;
@@ -266,7 +338,7 @@ function stepCounts() {
     </div>`));
   const next = el('button', 'btn saffron', t('next') + ' ›');
   next.style.cssText = 'width:100%;margin-top:16px;padding:15px;font-size:17px';
-  next.onclick = () => { state.step = 3; render(); };
+  next.onclick = () => { state.step = 4; render(); };
   view.appendChild(next);
 }
 function bump(k, d) {
@@ -284,6 +356,9 @@ function stepConfirm() {
   view.appendChild(el('div', 'card', `
     <div style="font-size:17px"><b>${spEm} ${t(r.species)}</b> × ${r.affected_count}
       ${r.dead_count ? `<span style="color:var(--red)"> · ☠ ${r.dead_count}</span>` : ''}</div>
+    ${r.onset_days_ago != null ? `<div class="muted" style="font-size:13px;margin-top:3px">
+      🕒 ${t('onset_since')}: <b>${r.onset_days_ago === 0 ? t('onset_today')
+        : r.onset_days_ago + ' ' + (LANG === 'en' ? 'days' : 'दिन')}</b></div>` : ''}
     <div style="margin-top:8px">${r.symptoms.map(s =>
       `<span class="chip info" style="margin:2px">${(syms[s] || {}).icon || ''} ${esc((syms[s] || {})[LANG] || s)}</span>`).join('')}</div>
     <div style="margin-top:12px">
@@ -734,6 +809,7 @@ function adviceFor(names) {
 async function services() {
   view.innerHTML = `<div style="font-family:var(--f-d);font-size:20px;font-weight:700;
     margin:4px 0 14px">🤝 ${t('services')}</div>`;
+  healthCentres();
 
   /* ---- compensation claims ---- */
   const claimCard = el('div', 'card');
@@ -904,6 +980,22 @@ window.PR = {
     if (symptoms && symptoms.length) { state.report.symptoms = symptoms; state.step = species ? 2 : 1; }
     renderNav(); render();
   },
+  /* The voice interview produced a complete case — drop the farmer on the
+     confirmation step so they still see what is about to be sent. */
+  fillReport(d) {
+    resetReport();
+    Object.assign(state.report, d);
+    state.tab = 'report'; state.step = 4;
+    renderNav(); render();
+  },
+  /* …or send it there and then, for a farmer who cannot read the screen. */
+  submitFromVoice(d) {
+    resetReport();
+    Object.assign(state.report, d);
+    state.tab = 'report';
+    renderNav();
+    submitReport();
+  },
 };
 
 function initAssistant() {
@@ -1039,4 +1131,60 @@ function initAssistant() {
                L('लम्पी रोग क्या है?', 'लम्पी रोग म्हणजे काय?', 'What is lumpy skin disease?'),
                L('आज का मौसम', 'आजचे हवामान', "Today's weather")],
   });
+}
+
+
+/* ------------------------- NEARBY VETERINARY CENTRES ----------------------- */
+/* The PS names "diagnostic facilities may be distant" as a pain point. A farmer
+   should never have to ask where to go: nearest first, with the distance, the
+   opening hours and one tap to call 1962 or open directions. */
+const CENTRE_ICON = { dispensary: '🏥', polyclinic: '🏨', lab: '🔬', mvu: '🚑', ai_centre: '🧬' };
+
+async function healthCentres() {
+  const card = el('div', 'card');
+  card.style.marginBottom = '14px';
+  card.innerHTML = `<h3>📍 ${t('health_centres')}</h3>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px">${t('centres_sub')}</div>
+    <div class="muted" style="font-size:13px">⏳ …</div>`;
+  view.appendChild(card);
+  let data;
+  try { data = await API.get('/api/health-centres'); }
+  catch (e) { card.remove(); return; }
+  const list = (data && data.centres) || [];
+  if (!list.length) { card.remove(); return; }
+
+  card.innerHTML = `<h3>📍 ${t('health_centres')}</h3>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px">${t('centres_sub')}</div>`;
+  list.forEach(c => {
+    const row = el('div', '');
+    row.style.cssText = 'display:flex;gap:10px;align-items:flex-start;padding:10px 0;' +
+                        'border-bottom:1px solid var(--surface-2)';
+    row.innerHTML = `
+      <span style="font-size:22px;line-height:1.1">${CENTRE_ICON[c.kind] || '🏥'}</span>
+      <div style="flex:1;min-width:0">
+        <b style="font-size:14.5px">${esc(c.name_local || c.name)}</b>
+        <div class="muted" style="font-size:11.5px;margin-top:2px">
+          ${esc(t('kind_' + c.kind) || c.kind)}
+          ${c.distance_km != null ? ` · <b>${c.distance_km} ${t('km_away')}</b>` : ''}
+          ${c.is_24x7 ? ` · <span style="color:var(--green)">${t('open_24x7')}</span>`
+                      : (c.timings ? ` · ${t('timings')}: ${esc(c.timings)}` : '')}
+        </div>
+      </div>`;
+    const acts = el('div', '');
+    acts.style.cssText = 'display:flex;gap:6px;flex-direction:column;align-items:flex-end';
+    const call = el('a', 'btn outline sm', '📞 ' + (c.phone || '1962'));
+    call.href = 'tel:' + (c.phone || '1962');
+    call.style.whiteSpace = 'nowrap';
+    acts.appendChild(call);
+    if (c.maps) {
+      const dir = el('a', 'btn outline sm', '🧭 ' + t('directions'));
+      dir.href = c.maps; dir.target = '_blank'; dir.rel = 'noopener';
+      dir.style.whiteSpace = 'nowrap';
+      acts.appendChild(dir);
+    }
+    row.appendChild(acts);
+    card.appendChild(row);
+  });
+  card.appendChild(el('div', '', `<div class="muted" style="font-size:11.5px;margin-top:9px">
+    ☎️ ${t('ivr_hint')}</div>`));
 }

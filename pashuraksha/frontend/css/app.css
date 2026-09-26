@@ -468,3 +468,10 @@ section,[id]{scroll-margin-top:140px}
   letter-spacing:.03em}
 @media(max-width:640px){.brand-lockup img{width:104px;height:104px;border-radius:22px}
   .brand-lockup .tag{font-size:13px}}
+
+
+/* Outbreak-awareness banner: a single settle, not a loop. A warning that
+   keeps moving is noise; one entrance earns the glance. */
+@keyframes zoneIn{from{opacity:0;transform:translateY(-6px) scale(.985)}}
+.zone-alert{animation:zoneIn 420ms cubic-bezier(.23,1,.32,1)}
+@media(prefers-reduced-motion:reduce){.zone-alert{animation:none}}

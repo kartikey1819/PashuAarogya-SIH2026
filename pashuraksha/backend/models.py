@@ -235,3 +235,26 @@ class Camp(Base):
     status = Column(String, default="SCHEDULED")  # SCHEDULED|COMPLETED|CANCELLED
     created_at = Column(DateTime, default=datetime.utcnow)
     village = relationship("Location")
+
+
+class HealthCentre(Base):
+    """A place a farmer can physically take an animal to, or call.
+
+    Seeded from the public veterinary-institution pattern (dispensary → polyclinic
+    → district lab) plus the 1962 mobile units. Phone numbers are deliberately NOT
+    invented: everything routes through the real 1962 toll-free helpline, and the
+    `phone` column is there for a department to fill in from its own directory.
+    """
+    __tablename__ = "health_centres"
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    name_local = Column(String)                 # Hindi / Marathi name
+    kind = Column(String)      # dispensary|polyclinic|hospital|mvu|lab|ai_centre
+    village_id = Column(Integer, ForeignKey("locations.id"))   # nearest village
+    block_id = Column(Integer, ForeignKey("locations.id"))
+    lat = Column(Float)
+    lon = Column(Float)
+    phone = Column(String, default="1962")      # 1962 = the real state helpline
+    timings = Column(String)
+    services = Column(String)                   # comma-separated service codes
+    is_24x7 = Column(Boolean, default=False)

@@ -11,3 +11,4 @@ node_modules/
 *.db
 *.log
 public_url.txt
+*.db.bak-*

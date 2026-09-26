@@ -40,6 +40,51 @@ works on its rule-based skills. The key stays on the server — the browser only
 ever calls `/api/assistant/chat`.
 Language default is **Hindi everywhere** (`pr_lang`), with मराठी / English one tap away.
 
+### 🗣️ The voice interview (new)
+Tapping **🎙️ बोलकर शिकायत दर्ज करें** on the report screen hands the whole
+consultation to पशु मित्र. It asks one short question at a time, the way a vet
+would on the phone — *"क्या दूध कम हो गया है?"*, *"क्या पशु चारा खा रहा है?"*,
+*"शरीर पर गांठें?"* — and each answer maps to a symptom code the triage engine
+already understands. It listens again automatically after every question, so a
+farmer who cannot read never touches the screen. At the end it reads the case
+back and offers **✅ भेजें** or **✏️ पहले देखूँ**.
+
+### 🕒 "How long has the animal been ill?"
+The report now asks for the onset (one tap: आज / कल / २-३ दिन / एक हफ्ता, or an
+exact date), and the voice interview asks the same question. Before this the API
+stamped `onset_date = today`, so the reporting delay was always zero and the PS's
+first expected outcome could not be shown. The district dashboard now carries a
+**median reporting delay** KPI (onset → report, 30-day window).
+
+### ⚠️ Zone-wide outbreak awareness
+When the radar detects a cluster, every village in the zone gets the advisory in
+Marathi/Hindi/English — not just the village that reported — and each farmer in
+the zone sees a red awareness banner at the top of their home screen, with a
+🔊 listen button. Neighbouring villages are the ones who can still prevent it.
+
+### 📍 Nearby veterinary centres
+Farmer → सेवा lists the real institution ladder nearest first: block dispensary →
+district polyclinic → district lab, plus the 1962 mobile unit, with distance,
+opening hours, one-tap **call 1962** and directions. No phone numbers are
+invented — everything routes through the genuine 1962 helpline.
+
+### 🟢 Live farmer enrolment (for the demo)
+The login page has **🆕 Register here**: name, mobile, village — the farmer is
+created and signed in in one step. The district dashboard shows a live wall
+counting registrations against a target of 20 (`PASHU_LIVE_TARGET`), with each
+new name, village and herd size appearing within one sync poll. It is the
+on-stage proof that records really reach the database.
+
+### 🗺️ Two regions: Maharashtra + Indore (M.P.)
+The problem statement is Maharashtra's, so Maharashtra stays the primary dataset
+and keeps every outbreak storyline. **Indore district** (Depalpur, Sanwer, Mhow,
+Hatod, Rau) is seeded alongside it with Malwa breeds — Malvi, Nimari, Bhadawari,
+Kadaknath — so the team can demo, and enrol real farmers, in the geography they
+are standing in. Demo logins `9000000011` (farmer, Betma) and `9000000012`
+(D.V.O. Indore). Set `PASHU_REGION=mh` to seed Maharashtra only.
+> Tehsil names and coordinates are real; the village names are illustrative and
+> must be replaced with LGD-verified names before any real deployment.
+
 ### Pashu Lens AI sidecar
 `run.bat` starts it automatically if the PashuPehchaan model is present at
 `C:\Users\admin\Desktop\BreedVision18\Breed-Vision-main\breed-ai-service`
