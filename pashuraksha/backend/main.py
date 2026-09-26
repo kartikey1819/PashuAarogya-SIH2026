@@ -21,6 +21,7 @@ from models import (Location, User, Farmer, Animal, Case, Vaccination, HealthCen
 import engine as intel
 import seed as seeder
 import weather as wx
+import keepalive
 import forecast as fc
 
 AI_URL = os.environ.get("PASHU_AI_URL", "http://127.0.0.1:8001")
@@ -68,6 +69,14 @@ def startup():
                 if seeder.seed_all(db):
                     BOOT["stage"] = "computing risk"
                     intel.refresh_all(db)
+                else:
+                    # Already seeded (a cloud database holding real reports).
+                    # Add only what is missing, never re-seed over live records.
+                    BOOT["stage"] = "top-up"
+                    added = seeder.seed_topup(db)
+                    if added:
+                        print(f"[boot] topped up: {', '.join(added)}", flush=True)
+                        intel.refresh_all(db)
                 BOOT["stage"] = "ready"
             finally:
                 db.close()
@@ -80,6 +89,8 @@ def startup():
 
     import threading
     threading.Thread(target=_boot, daemon=True).start()
+    # keep the free-tier instance from idling out between demos
+    keepalive.start()
 
 
 # --------------------------------------------------------------------- auth --
@@ -1034,6 +1045,8 @@ def healthz():
     url = str(engine.url)
     return {"ok": True, "ready": BOOT["ready"], "stage": BOOT["stage"],
             "error": BOOT["error"], "locations": n,
+            "keepalive": {k: keepalive.STATE[k] for k in
+                          ("enabled", "last_ok", "pings", "failures", "last_error")},
             "db": "postgres" if "postgres" in url else "sqlite",
             "db_host": url.split("@")[-1].split("/")[0] if "@" in url else "local",
             "started": BOOT["started"], "now": datetime.utcnow().isoformat()}

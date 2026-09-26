@@ -600,3 +600,135 @@ def advance_outbreak_day(db):
               key_sym="oral_lesions")
     db.commit()
     return db.query(Case).count() - n0
+
+
+# ---------------------------------------------------------------- top-up ----
+def seed_topup(db):
+    """Additively bring an ALREADY-seeded database up to date.
+
+    `seed_all` bails out the moment it sees a Location, which is right — it must
+    never re-seed over live records. But a database seeded before a feature
+    existed then never gains it, and a cloud deployment cannot simply be wiped
+    because farmers have filed real reports into it.
+
+    So each block below adds one missing thing and is safe to run on every boot:
+    it checks first, writes only what is absent, and touches nothing that exists.
+    """
+    added = []
+
+    # veterinary institutions — the farmer's "where do I take this animal?"
+    if db.query(HealthCentre).count() == 0 and db.query(Location).count():
+        _seed_health_centres(db)
+        added.append("health centres")
+
+    # second region (Indore, M.P.)
+    if (os.environ.get("PASHU_REGION", "both").lower() != "mh"
+            and not db.query(Location).filter(Location.name == "Indore").first()
+            and db.query(Location).count()):
+        n = _add_mp_region(db)
+        added.append(f"Indore region ({n} villages)")
+
+    if added:
+        db.commit()
+    return added
+
+
+def _add_mp_region(db):
+    """Create the Indore district tree, then populate it like any other region.
+
+    Kept separate from seed_all so it can run against a database that already
+    holds Maharashtra data and live farmer reports.
+    """
+    # continue the LGD sequence rather than colliding with existing codes
+    try:
+        top = max(int(c[0]) for c in db.query(Location.lgd_code).all()
+                  if c[0] and str(c[0]).isdigit())
+    except ValueError:
+        top = 500000
+    lgd = top
+
+    new_villages = []
+    mp_vname = iter(MP_VILLAGE_NAMES * 2)
+    for dname, d in GEO_MP.items():
+        dist = Location(name=dname, name_mr=d["mr"], level="district",
+                        lgd_code=str(lgd := lgd + 1), lat=d["lat"], lon=d["lon"])
+        db.add(dist); db.flush()
+        for bname, b in d["blocks"].items():
+            blk = Location(name=bname, name_mr=b["mr"], level="block",
+                           lgd_code=str(lgd := lgd + 1), parent_id=dist.id,
+                           lat=b["lat"], lon=b["lon"])
+            db.add(blk); db.flush()
+            for _ in range(4):
+                v = Location(name=next(mp_vname), level="village",
+                             lgd_code=str(lgd := lgd + 1), parent_id=blk.id,
+                             lat=b["lat"] + rng.uniform(-0.07, 0.07),
+                             lon=b["lon"] + rng.uniform(-0.07, 0.07))
+                db.add(v); db.flush()
+                new_villages.append(v)
+            # the block dispensary for the new block
+            db.add(HealthCentre(
+                name=f"Veterinary Dispensary, {blk.name}",
+                name_local=f"पशु चिकित्सालय, {blk.name_mr or blk.name}",
+                kind="dispensary", block_id=blk.id, lat=blk.lat, lon=blk.lon,
+                timings="09:00-13:00, 14:00-17:00",
+                services="treatment,vaccination,deworming,ai"))
+        # district-level institutions
+        db.add(HealthCentre(
+            name=f"Veterinary Polyclinic, {dist.name}",
+            name_local=f"पशु चिकित्सा पॉलीक्लिनिक, {dist.name_mr or dist.name}",
+            kind="polyclinic", block_id=dist.id, lat=dist.lat, lon=dist.lon,
+            timings="09:00-17:00", services="treatment,surgery,referral,vaccination,ai"))
+        db.add(HealthCentre(
+            name=f"District Disease Investigation Lab, {dist.name}",
+            name_local=f"जिला रोग अन्वेषण प्रयोगशाला, {dist.name_mr or dist.name}",
+            kind="lab", block_id=dist.id, lat=dist.lat, lon=dist.lon,
+            timings="10:00-17:00", services="sample_testing,post_mortem"))
+        db.add(HealthCentre(
+            name=f"1962 Mobile Veterinary Unit — {dist.name}",
+            name_local=f"१९६२ फिरता पशुवैद्यकीय दवाखाना — {dist.name_mr or dist.name}",
+            kind="mvu", block_id=dist.id, lat=dist.lat, lon=dist.lon,
+            timings="24x7 on call", is_24x7=True,
+            services="doorstep_treatment,emergency,sample_collection"))
+    db.flush()
+
+    # farmers, animals and vaccination history for the new villages only
+    tag_seq = 900000000001
+    today = date.today()
+    for v in new_villages:
+        for _ in range(rng.randint(2, 4)):
+            u = User(phone=f"97{rng.randint(10000000, 99999999)}",
+                     name=rng.choice(MP_FARMER_NAMES), role="farmer",
+                     location_id=v.id, lang="hi")
+            db.add(u); db.flush()
+            fm = Farmer(user_id=u.id, village_id=v.id)
+            db.add(fm); db.flush()
+            for _ in range(rng.randint(2, 6)):
+                sp = _pick_species()
+                a = Animal(tag_id=f"IN{tag_seq}", species=sp,
+                           breed=rng.choice(BREEDS_MP[sp]),
+                           sex=rng.choice(["F", "F", "F", "M"]),
+                           age_months=rng.randint(8, 110),
+                           farmer_id=fm.id, village_id=v.id)
+                db.add(a); db.flush()
+                tag_seq += 1
+                if rng.random() < rng.uniform(0.55, 0.9):
+                    given = today - timedelta(days=rng.randint(25, 330))
+                    db.add(Vaccination(animal_id=a.id, village_id=v.id,
+                                       disease_key=rng.choice(["fmd", "lsd", "hs", "ppr"]),
+                                       vaccine="Govt campaign", given_on=given,
+                                       due_on=given + timedelta(days=365),
+                                       campaign="LHDCP 2026"))
+    # a demo login that lands in Indore
+    if new_villages and not db.query(User).filter(User.phone == "9000000011").first():
+        db.add(User(phone="9000000011", name="Ramesh Patidar", role="farmer",
+                    location_id=new_villages[0].id, lang="hi"))
+        db.flush()
+        u = db.query(User).filter(User.phone == "9000000011").first()
+        db.add(Farmer(user_id=u.id, village_id=new_villages[0].id))
+    ind = db.query(Location).filter(Location.name == "Indore",
+                                    Location.level == "district").first()
+    if ind and not db.query(User).filter(User.phone == "9000000012").first():
+        db.add(User(phone="9000000012", name="D.V.O. Indore", role="district",
+                    location_id=ind.id, lang="en"))
+    db.flush()
+    return len(new_villages)

@@ -85,7 +85,25 @@ No code changes needed — `database.py` already reads it, and also accepts
 | `GEMINI_API_KEY` | your key from `.env`, for पशु मित्र |
 | `PASHU_AI_URL` | only if you deploy the breed model (step 6) |
 
-### 5. First boot
+### 5. Updating a deployment that already has data
+
+`seed_all` refuses to touch a database that already holds records, which is
+right — it must never re-seed over real reports. But that means a cloud
+database seeded before a feature existed never gains it, and you cannot simply
+wipe one that farmers have filed into.
+
+So every boot also runs `seed_topup()`: it adds only what is **missing** and
+leaves everything else alone. Verified against a pre-Indore backup — 87 → 113
+locations, 39 health centres created, Indore and its 20 villages added, and all
+1,027 existing cases untouched. Running it twice adds nothing the second time.
+
+Watch for it in the deploy log:
+
+```
+[boot] topped up: health centres, Indore region (20 villages)
+```
+
+### 6. First boot
 The demo world (87 locations, 784 animals, ~1,000 historical cases) seeds itself
 on first start against the empty database. Seeding runs **in a background thread**
 so the port opens immediately and Render's health check passes — watch progress at:
@@ -98,7 +116,7 @@ https://your-app.onrender.com/healthz
 
 Give it 1–3 minutes on Postgres. Until `ready` is true, dashboards will look empty.
 
-### 6. Pashu Lens (the breed model) — the honest constraint
+### 7. Pashu Lens (the breed model) — the honest constraint
 <a id="the-backup-recipe-render-without-the-ai-model"></a>
 **It will not run on Render's free tier.** TensorFlow plus the 235 MB
 EfficientNetV2 model needs well over the 512 MB RAM free instances get; it will
@@ -179,17 +197,37 @@ which catches the most common mistake of all: `PASHU_DB_URL` never being set, or
 pointing at a Postgres instance Render has since expired (the free database is
 removed after 30 days — create a new one, or use Neon, and update the variable).
 
-### 7. Keep it awake
-Free Render services sleep after 15 minutes idle and take ~50 s to wake — fatal
-mid-presentation. Point a free uptime pinger
-([UptimeRobot](https://uptimerobot.com), [cron-job.org](https://cron-job.org)) at:
+### 8. Keep it awake — now built in
+
+Free Render services sleep after ~15 minutes idle and take ~50 s to wake, which
+is fatal mid-presentation. Two guards ship with the repo, and they fail in
+different ways on purpose:
+
+| | What it does | When it saves you |
+|---|---|---|
+| `backend/keepalive.py` | The instance pings its own public URL every ~10 min (jittered). Render sees ordinary inbound traffic, so the idle clock never runs out. | While the service is **up** — it never goes to sleep in the first place |
+| `.github/workflows/keepalive.yml` | GitHub Actions cron pings from outside every 10 min, retrying through a cold start | After a **deploy, crash or OOM** — once the instance is down, its own thread is down with it and only an outside request can wake it |
+
+The self-ping needs no configuration on Render: it reads `RENDER_EXTERNAL_URL`,
+which Render injects. Anywhere else, set `PASHU_PUBLIC_URL`. With neither set —
+local development — the thread exits immediately and pings nothing.
+
+Check it is working:
 
 ```
-https://your-app.onrender.com/healthz   every 10 minutes
+https://your-app.onrender.com/healthz
+→ "keepalive": {"enabled": true, "last_ok": "…", "pings": 7, "failures": 0}
 ```
 
-That endpoint is deliberately cheap. Still, **open the URL yourself 5 minutes
-before you present.**
+The GitHub workflow uses the repository variable `PASHU_URL` if you set one
+(Settings → Secrets and variables → Actions → Variables), else
+`https://pashuaarogya.onrender.com`. It also has a **Run workflow** button for
+an instant wake-up before you present.
+
+Two honest limits: GitHub disables scheduled workflows in a repo with no commits
+for 60 days, and keeping one free service always awake uses roughly 730 of
+Render's 750 free instance-hours a month — fine for one service, not two.
+**Still open the URL yourself 5 minutes before you present.**
 
 ---
 
