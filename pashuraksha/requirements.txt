@@ -4,4 +4,6 @@ sqlalchemy>=2.0
 pyyaml>=6.0
 # Postgres driver — only used when PASHU_DB_URL / DATABASE_URL points at Postgres.
 # Harmless locally, required for any cloud deploy with a persistent database.
+# database.py pins postgresql+psycopg2:// explicitly, so this is the driver that
+# gets used regardless of which SQLAlchemy version pip resolves.
 psycopg2-binary>=2.9

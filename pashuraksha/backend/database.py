@@ -13,6 +13,15 @@ DB_URL = (os.environ.get("PASHU_DB_URL")
 if DB_URL.startswith("postgres://"):
     DB_URL = DB_URL.replace("postgres://", "postgresql://", 1)
 
+# Name the driver explicitly. A bare postgresql:// URL lets SQLAlchemy pick the
+# DBAPI, and that default is not stable across versions: 2.0 chooses psycopg2,
+# newer releases choose psycopg (v3). We ship psycopg2-binary, so on a host that
+# resolved a newer SQLAlchemy the app died at import with
+# "ModuleNotFoundError: No module named 'psycopg'" -- before the port ever
+# opened. Pinning the driver in the URL makes the choice ours, not pip's.
+if DB_URL.startswith("postgresql://"):
+    DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+
 _is_sqlite = DB_URL.startswith("sqlite")
 # A wrong or unreachable Postgres host must fail fast, not hang: without a
 # connect_timeout the driver waits on TCP for minutes, which on a platform
