@@ -55,6 +55,15 @@ def startup():
     if SERVERLESS:
         BOOT.update(ready=True, stage="serverless")
         print("[boot] serverless: skipping seed and keep-alive", flush=True)
+        # A serverless bundle's filesystem is read-only and empty, so falling
+        # back to SQLite here means no users, and every login answers "Phone not
+        # registered" -- which reads like a broken login rather than a missing
+        # environment variable. Say plainly which it is.
+        if _is_sqlite_engine():
+            BOOT["error"] = ("PASHU_DB_URL is not set. Serverless cannot seed or "
+                             "persist SQLite: point it at a Postgres database "
+                             "that has already been seeded.")
+            print("[boot] WARNING: " + BOOT["error"], flush=True)
         return
 
     def _boot():
@@ -1034,6 +1043,10 @@ def export_csv(what: str, db: Session = Depends(get_db)):
 # Vercel sets VERCEL; Lambda sets AWS_LAMBDA_FUNCTION_NAME. Neither platform
 # keeps a process alive between requests, which changes what startup may do.
 SERVERLESS = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+
+
+def _is_sqlite_engine() -> bool:
+    return str(engine.url).startswith("sqlite")
 
 BOOT = {"ready": False, "stage": "starting", "error": None,
         "started": datetime.utcnow().isoformat()}
