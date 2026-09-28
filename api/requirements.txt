@@ -1,0 +1,15 @@
+# Dependencies for the Vercel serverless function.
+#
+# Deliberately kept here rather than at the repository root: Render builds from
+# pashuraksha/requirements.txt with rootDir=pashuraksha, and a root-level
+# requirements.txt is the kind of thing that quietly changes what another
+# platform installs. Scoping this file to api/ means Vercel reads it and Render
+# never sees it.
+#
+# Same pins as pashuraksha/requirements.txt, minus uvicorn: Vercel runs the ASGI
+# app through its own server, so no process server is needed here.
+
+fastapi>=0.110,<1.0
+sqlalchemy>=2.0,<2.2
+pyyaml>=6.0,<7.0
+psycopg2-binary>=2.9,<3.0

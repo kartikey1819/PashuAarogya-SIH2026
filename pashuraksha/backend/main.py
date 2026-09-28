@@ -47,6 +47,16 @@ def startup():
     _u = str(engine.url)
     print(f"[boot] database = {_u.split('@')[-1] if '@' in _u else _u}", flush=True)
 
+    # Serverless (Vercel, Lambda): every request may be a fresh, short-lived
+    # process, so a background seeding thread would be killed mid-write and a
+    # 1,000-row seed would blow the function timeout. There the database is
+    # prepared out of band -- seeded once from a laptop or by the Render
+    # deployment -- and the function only serves it.
+    if SERVERLESS:
+        BOOT.update(ready=True, stage="serverless")
+        print("[boot] serverless: skipping seed and keep-alive", flush=True)
+        return
+
     def _boot():
         # EVERY database call lives in here, table creation included. If the
         # database is unreachable this thread fails while the web server keeps
@@ -1021,6 +1031,10 @@ def export_csv(what: str, db: Session = Depends(get_db)):
 
 
 
+# Vercel sets VERCEL; Lambda sets AWS_LAMBDA_FUNCTION_NAME. Neither platform
+# keeps a process alive between requests, which changes what startup may do.
+SERVERLESS = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+
 BOOT = {"ready": False, "stage": "starting", "error": None,
         "started": datetime.utcnow().isoformat()}
 
@@ -1035,7 +1049,7 @@ def healthz():
     `stage`/`error` say what the database is doing.
     """
     n = None
-    if BOOT["ready"] and BOOT["stage"] == "ready":
+    if BOOT["ready"] and BOOT["stage"] in ("ready", "serverless"):
         try:
             db = SessionLocal()
             n = db.query(func.count(Location.id)).scalar() or 0
