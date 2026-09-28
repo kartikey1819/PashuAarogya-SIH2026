@@ -32,8 +32,28 @@ PUBLIC_URL = (os.environ.get("PASHU_PUBLIC_URL")
 # 10 minutes: comfortably inside Render's ~15-minute idle window, and only
 # ~144 requests a day against a health check that touches no table.
 INTERVAL = int(os.environ.get("PASHU_KEEPALIVE_SECONDS", "600"))
+
+# Quiet hours, in UTC. Free tier allows ~750 instance-hours a month and an
+# always-awake service burns ~730 of them, so a single busy month ends in a
+# suspended service -- a dead link, which is far worse than a slow first visit.
+# The default window 03:00-18:59 UTC is 08:30-00:29 IST: awake for every hour an
+# Indian reviewer plausibly opens it, asleep overnight. Set PASHU_KEEPALIVE_HOURS
+# to "all" for genuine 24/7, or to another "START-END" pair.
+HOURS = os.environ.get("PASHU_KEEPALIVE_HOURS", "3-18").strip().lower()
 STATE = {"enabled": False, "url": None, "last_ok": None, "last_error": None,
-         "pings": 0, "failures": 0}
+         "pings": 0, "failures": 0, "window": HOURS}
+
+
+def _within_window(now=None):
+    """True when the keep-alive should be pinging right now."""
+    if HOURS in ("all", "24x7", ""):
+        return True
+    try:
+        start, end = (int(x) for x in HOURS.split("-"))
+    except ValueError:
+        return True                       # malformed setting: never go silent
+    hour = (now or datetime.utcnow()).hour
+    return start <= hour <= end if start <= end else (hour >= start or hour <= end)
 
 
 def _ping_once(url: str):
@@ -49,6 +69,8 @@ def _loop():
         # jitter, so the self-ping and the GitHub cron never line up into one
         # burst followed by a long silence
         time.sleep(max(60, INTERVAL) + random.randint(-45, 45))
+        if not _within_window():
+            continue                      # asleep by design; hours are money here
         try:
             code = _ping_once(url)
             STATE["pings"] += 1

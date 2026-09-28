@@ -17,7 +17,11 @@ name: Keep Render awake
 
 on:
   schedule:
-    - cron: "*/10 * * * *"     # every 10 minutes (Render idles at ~15)
+    # 03:00-18:59 UTC = 08:30-00:29 IST. Every ten minutes through the hours an
+    # Indian reviewer might open the link, and quiet overnight so the free
+    # instance-hour budget is never exhausted (an exhausted budget suspends the
+    # service, which is a dead link rather than a slow one).
+    - cron: "*/10 3-18 * * *"
   workflow_dispatch:            # and a manual "wake it now" button
 
 concurrency:
@@ -31,7 +35,7 @@ jobs:
     steps:
       - name: Ping /healthz until it answers
         run: |
-          URL="${{ vars.PASHU_URL || 'https://pashuaarogya-sih2026.onrender.com' }}"
+          URL="${{ vars.PASHU_URL || 'https://pashuaarogya-sih2026-qiem.onrender.com' }}"
           echo "Pinging $URL/healthz"
           # A sleeping instance takes ~50s to cold-start, so a single short
           # request would time out and report a false failure. Retry with a
