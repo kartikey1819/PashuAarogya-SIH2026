@@ -1,9 +1,30 @@
-fastapi>=0.110
-uvicorn[standard]>=0.29
-sqlalchemy>=2.0
-pyyaml>=6.0
+# Deliberately small, and every bound is deliberate.
+#
+# Two production failures taught these lines:
+#
+#   1. `sqlalchemy>=2.0` resolved to 2.1 on a fresh cloud build, and 2.1 changed
+#      the default Postgres driver from psycopg2 to psycopg (v3) — which we do
+#      not ship. The app died at import. database.py now names the driver in the
+#      URL, and the upper bound below stops a future major moving the ground
+#      again mid-review.
+#
+#   2. `uvicorn[standard]` pulls watchfiles, uvloop, httptools, python-dotenv
+#      and websockets. We use none of them: no --reload, no websockets, and
+#      env loading is our own. When PyPI timed out serving watchfiles, pip
+#      backtracked through 43 uvicorn versions and reported "ResolutionImpossible"
+#      — a network blip disguised as a dependency conflict, and a failed deploy.
+#      Plain uvicorn has far fewer ways to fail.
+#
+# Upper bounds are pinned to majors, not exact versions: reproducible enough to
+# survive a month of unattended review, loose enough to still get patches.
+
+fastapi>=0.110,<1.0
+uvicorn>=0.29,<1.0
+sqlalchemy>=2.0,<2.2
+pyyaml>=6.0,<7.0
+
 # Postgres driver — only used when PASHU_DB_URL / DATABASE_URL points at Postgres.
 # Harmless locally, required for any cloud deploy with a persistent database.
 # database.py pins postgresql+psycopg2:// explicitly, so this is the driver that
 # gets used regardless of which SQLAlchemy version pip resolves.
-psycopg2-binary>=2.9
+psycopg2-binary>=2.9,<3.0
