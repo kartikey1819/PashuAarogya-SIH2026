@@ -4,12 +4,16 @@
 #
 #   Render dashboard → New → Blueprint → point at this repo.
 #
+# The service name becomes the hostname, and hostnames are globally unique
+# across all of Render — so this must not collide with an earlier deployment of
+# the same project on another account.
+#
 # Everything below is free-tier. Two known free-tier limits, both handled:
 #   * the disk is ephemeral  → we use Postgres, never the SQLite file
 #   * the service sleeps after 15 min idle → see the keep-alive note in DEPLOY.md
 services:
   - type: web
-    name: pashuaarogya
+    name: pashuaarogya-sih2026
     runtime: python
     plan: free
     region: singapore                 # closest Render region to India

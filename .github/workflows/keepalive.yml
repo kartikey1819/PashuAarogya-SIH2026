@@ -31,7 +31,7 @@ jobs:
     steps:
       - name: Ping /healthz until it answers
         run: |
-          URL="${{ vars.PASHU_URL || 'https://pashuaarogya.onrender.com' }}"
+          URL="${{ vars.PASHU_URL || 'https://pashuaarogya-sih2026.onrender.com' }}"
           echo "Pinging $URL/healthz"
           # A sleeping instance takes ~50s to cold-start, so a single short
           # request would time out and report a false failure. Retry with a
